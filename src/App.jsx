@@ -8,12 +8,11 @@ import Dashboard          from './pages/Dashboard'
 import Presupuestador     from './pages/Presupuestador'
 import Inventario         from './pages/Inventario'
 import Historial          from './pages/Historial'
-import Facturas           from './pages/Facturas'
-import Estadisticas       from './pages/Estadisticas'
 import PedidosCompra      from './pages/PedidosCompra'
 import Saldos             from './pages/Saldos'
-import ABMC               from './pages/ABMC'
 import Promociones        from './pages/Promociones'
+import AdminRoutes        from './pages/admin/AdminRoutes'
+import { REDIRECCIONES_LEGADAS } from './pages/admin/rutasLegadas'
 
 /**
  * Spinner de carga — se muestra mientras AuthContext resuelve
@@ -72,41 +71,21 @@ export default function App() {
         <Route path="/presupuestador" element={<RequireAuth><Presupuestador /></RequireAuth>} />
         <Route path="/historial"      element={<RequireAuth><Historial /></RequireAuth>} />
         <Route path="/inventario"     element={<RequireAuth><Inventario /></RequireAuth>} />
-        <Route
-          path="/facturas"
-          element={
-            <RequireAuth>
-              <RequireSpecialAuth pageKey="facturas" label="Facturas">
-                <Facturas />
-              </RequireSpecialAuth>
-            </RequireAuth>
-          }
-        />
         <Route path="/pedidos"        element={<RequireAuth><PedidosCompra /></RequireAuth>} />
         <Route path="/saldos"         element={<RequireAuth><Saldos /></RequireAuth>} />
         <Route path="/promociones"    element={<RequireAuth><Promociones /></RequireAuth>} />
 
-        {/* ── Rutas con segunda capa de autorización ───────────────── */}
+        {/* ── Panel Administrativo (Facturas, Estadísticas y ex-ABMC) ──────────
+            Cada sección conserva su segunda capa (SpecialAuthGate) a nivel de ruta. */}
         <Route
-          path="/estadisticas"
-          element={
-            <RequireAuth>
-              <RequireSpecialAuth pageKey="estadisticas" label="Estadísticas">
-                <Estadisticas />
-              </RequireSpecialAuth>
-            </RequireAuth>
-          }
+          path="/admin/*"
+          element={<RequireAuth><AdminRoutes Guard={RequireSpecialAuth} /></RequireAuth>}
         />
-        <Route
-          path="/abmc"
-          element={
-            <RequireAuth>
-              <RequireSpecialAuth pageKey="abmc" label="ABMC">
-                <ABMC />
-              </RequireSpecialAuth>
-            </RequireAuth>
-          }
-        />
+
+        {/* Marcadores viejos → nuevas rutas (el destino sigue pidiendo login y contraseña). */}
+        {REDIRECCIONES_LEGADAS.map(([desde, hacia]) => (
+          <Route key={desde} path={desde} element={<Navigate to={hacia} replace />} />
+        ))}
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -1,32 +1,27 @@
 // src/components/layout/AppShell.jsx
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard, FileText, Clock, Package, Receipt,
-  BarChart2, ShoppingCart, Wallet, Settings2, LogOut, Tag, Lock, Menu, X,
+  LayoutDashboard, FileText, Clock, Package,
+  ShoppingCart, Wallet, Settings2, LogOut, Tag, Menu, X,
 } from 'lucide-react'
-import { useAuth }        from '../../lib/AuthContext'
-import { useSpecialAuth } from '../../lib/SpecialAuthContext'
+import { useAuth } from '../../lib/AuthContext'
 import { useState, useEffect } from 'react'
-
-// Páginas que requieren segunda capa de autorización
-const SPECIAL_AUTH_PAGES = new Set(['/estadisticas', '/abmc', '/facturas'])
 
 const NAV_ITEMS = [
   { to: '/',               icon: LayoutDashboard, label: 'Dashboard'       },
   { to: '/presupuestador', icon: FileText,         label: 'Presupuestador' },
   { to: '/historial',      icon: Clock,            label: 'Historial'      },
   { to: '/inventario',     icon: Package,          label: 'Inventario'     },
-  { to: '/pedidos',        icon: ShoppingCart,     label: 'Pedidos'        },
+  { to: '/pedidos',        icon: ShoppingCart,     label: 'Pedidos de Compra' },
   { to: '/saldos',         icon: Wallet,           label: 'Saldos'         },
   { to: '/promociones',    icon: Tag,              label: 'Promociones'    },
-  { to: '/facturas',       icon: Receipt,          label: 'Facturas'       },
-  { to: '/estadisticas',   icon: BarChart2,        label: 'Estadísticas'   },
-  { to: '/abmc',           icon: Settings2,        label: 'ABMC'           },
+  // Facturas, Estadísticas y el ex-ABMC viven dentro del Panel (cada uno con su segunda capa).
+  // Sin `end`: queda resaltado en todo /admin/*.
+  { to: '/admin',          icon: Settings2,        label: 'Panel Administrativo' },
 ]
 
 export default function AppShell({ children }) {
   const { logout }      = useAuth()
-  const { hasAccess }   = useSpecialAuth()
   const navigate        = useNavigate()
   const location        = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -51,70 +46,45 @@ export default function AppShell({ children }) {
     navigate('/login')
   }
 
-  function isUnlocked(path) {
-    const pageKey = path.replace('/', '')
-    return hasAccess(pageKey)
-  }
-
   const navContent = (
     <>
       {/* Nav principal */}
       <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-0.5">
-        {NAV_ITEMS.map(({ to, icon: Icon, label }) => {
-          const isProtected = SPECIAL_AUTH_PAGES.has(to)
-
-          return (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              className={({ isActive }) => `
-                flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-body font-medium
-                transition-all duration-150 group
-                ${isActive
-                  ? 'bg-brand-500 text-white'
-                  : 'text-surface-300 hover:bg-surface-700 hover:text-white'
-                }
-              `}
-            >
-              {({ isActive }) => (
-                <>
-                  <Icon
-                    size={16}
-                    className={`flex-shrink-0 transition-colors ${
-                      isActive ? 'text-white' : 'text-surface-500 group-hover:text-brand-400'
-                    }`}
-                  />
-                  <span className="flex-1">{label}</span>
-
-                  {isProtected && (
-                    <Lock
-                      size={11}
-                      className={`
-                        flex-shrink-0 transition-all duration-300
-                        ${isActive
-                          ? 'text-white/60'
-                          : isUnlocked(to)
-                            ? 'text-brand-400/60'
-                            : 'text-surface-600'
-                        }
-                        ${isUnlocked(to) ? 'opacity-0' : 'opacity-100'}
-                      `}
-                      aria-label="Requiere autorización adicional"
-                    />
-                  )}
-                </>
-              )}
-            </NavLink>
-          )
-        })}
+        {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={({ isActive }) => `
+              flex items-center gap-3 px-3 min-h-[44px] rounded-xl text-sm font-body font-medium
+              transition-all duration-150 group
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
+              ${isActive
+                ? 'bg-brand-500/10 text-brand-500'
+                : 'text-surface-200 hover:bg-surface-700 hover:text-white'
+              }
+            `}
+          >
+            {({ isActive }) => (
+              <>
+                <Icon
+                  size={16}
+                  className={`flex-shrink-0 transition-colors ${
+                    isActive ? 'text-brand-500' : 'text-surface-300 group-hover:text-brand-400'
+                  }`}
+                />
+                <span className="flex-1">{label}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
       </nav>
 
       {/* Cerrar sesión */}
       <div className="px-3 py-4 border-t border-surface-700">
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm
+          className="w-full flex items-center gap-3 px-3 min-h-[44px] rounded-xl text-sm
                      font-body font-medium text-surface-400
                      hover:bg-red-500/10 hover:text-red-400
                      transition-all duration-150 group"
@@ -151,7 +121,7 @@ export default function AppShell({ children }) {
         </span>
         <button
           onClick={() => setMenuOpen(v => !v)}
-          className="p-2 rounded-xl text-surface-400 hover:text-white hover:bg-surface-700 transition-all"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-surface-200 hover:text-white hover:bg-surface-700 transition-all"
           aria-label={menuOpen ? 'Cerrar menú' : 'Abrir menú'}
         >
           {menuOpen ? <X size={20} /> : <Menu size={20} />}
@@ -184,7 +154,8 @@ export default function AppShell({ children }) {
           </div>
           <button
             onClick={() => setMenuOpen(false)}
-            className="p-1.5 rounded-lg text-surface-400 hover:text-white hover:bg-surface-700 transition-all"
+            className="flex h-11 w-11 items-center justify-center rounded-lg text-surface-200 hover:text-white hover:bg-surface-700 transition-all"
+            aria-label="Cerrar menú"
           >
             <X size={16} />
           </button>
