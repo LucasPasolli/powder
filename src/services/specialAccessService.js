@@ -120,7 +120,7 @@ export async function validateSpecialToken(pageKey, token) {
  */
 export async function cleanupExpiredTokens() {
   try {
-    await supabase.rpc('cleanup_expired_tokens')
+    await supabase.rpc('cleanup_expired_tokens') // eventualmente hay que migrarla a backend a esta responsabilidad
   } catch {
     // Silencioso — operación de mantenimiento, no crítica
   }
