@@ -4,7 +4,7 @@
 // disposición.
 import { Badge } from '../ui'
 import {
-  ESTADO_COLOR, ESTADO_LABEL, estadoDe, fechaDe, fmt, fmtFecha, totalesComprobante,
+  ESTADO_COLOR, ESTADO_LABEL, esLineaSimple, esSplit, estadoDe, fechaDe, fmt, fmtFecha, totalesComprobante,
 } from '../../lib/facturas'
 
 /** @param {{comprobante: import('../../lib/facturas').Comprobante}} props */
@@ -70,7 +70,7 @@ export function ItemsFactura({ items, variante }) {
   )
 }
 
-/** Neto, IVA y total. En un pago parcial sólo se muestra el total. */
+/** Neto, IVA y total. En un pago parcial o Split Payment sólo se muestra el total. */
 export function TotalesFactura({ comprobante }) {
   const { neto, iva, total } = totalesComprobante(comprobante)
   const Fila = ({ label, valor, fuerte }) => (
@@ -114,16 +114,22 @@ export default function DetalleFactura({ cliente, comprobante, esMobile }) {
       <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3">
         <Dato label="Número"><span className="font-mono tabular-nums">#{comprobante.idPresupuesto}</span></Dato>
         <Dato label="Fecha">{fmtFecha(fechaDe(comprobante))}</Dato>
-        <Dato label="Estado"><EstadoBadge comprobante={comprobante} /></Dato>
+        <Dato label="Estado">
+          <span className="flex flex-wrap items-center gap-2">
+            <EstadoBadge comprobante={comprobante} />
+          </span>
+        </Dato>
         <Dato label="Cliente" className="col-span-2">{cliente.nombre}</Dato>
         <Dato label="CUIT"><span className="font-mono tabular-nums">{cliente.cuit || '—'}</span></Dato>
       </dl>
 
       <section aria-label="Ítems">
         <h3 className="text-surface-100 font-body font-semibold text-base mb-1">Ítems</h3>
-        {comprobante.tipo === 'pago_parcial' ? (
+        {esLineaSimple(comprobante) ? (
           <p className="text-surface-400 text-sm font-body py-2">
-            Cobro puntual: los ítems figuran en el presupuesto original.
+            {esSplit(comprobante)
+              ? 'Cobro por Split Payment: los ítems figuran en el presupuesto original.'
+              : 'Cobro puntual: los ítems figuran en el presupuesto original.'}
           </p>
         ) : items.length === 0 ? (
           <p className="text-surface-500 text-sm font-body py-2">Sin ítems registrados.</p>

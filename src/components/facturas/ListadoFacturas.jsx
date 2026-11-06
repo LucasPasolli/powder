@@ -16,7 +16,7 @@ import { ChevronRight } from 'lucide-react'
 import { Button } from '../ui'
 import FullScreenSheet from '../ui/FullScreenSheet'
 import useBreakpoint from '../../hooks/useBreakpoint'
-import { claveComprobante, fechaDe, fmt, fmtFecha, estadoDe, ESTADO_LABEL, totalesGrupos } from '../../lib/facturas'
+import { claveComprobante, esLineaSimple, esSplit, fechaDe, fmt, fmtFecha, estadoDe, ESTADO_LABEL, totalesGrupos } from '../../lib/facturas'
 import DetalleFactura, { EstadoBadge, ItemsFactura, TotalesFactura } from './DetalleFactura'
 import { FOCO, TOQUE } from './estilos'
 
@@ -34,7 +34,9 @@ function FilaMovil({ cliente, c, onAbrir }) {
             <span className="text-white font-mono text-base tabular-nums">#{c.idPresupuesto}</span>
             <span className="text-surface-300 text-sm tabular-nums">{fmtFecha(fechaDe(c))}</span>
           </span>
-          <span className="block mt-1.5"><EstadoBadge comprobante={c} /></span>
+          <span className="mt-1.5 flex flex-wrap items-center gap-2">
+            <EstadoBadge comprobante={c} />
+          </span>
         </span>
         <span className="text-brand-400 font-mono font-bold text-base tabular-nums whitespace-nowrap">{fmt(c.monto)}</span>
         <ChevronRight size={18} className="text-surface-500 flex-shrink-0" aria-hidden="true" />
@@ -62,7 +64,9 @@ function TablaTablet({ cliente, onAbrir }) {
             className="border-b border-surface-700/30 last:border-0 cursor-pointer active:bg-surface-700/50 text-surface-200">
             <td className="py-2 px-4 font-mono tabular-nums text-white">#{c.idPresupuesto}</td>
             <td className="py-2 px-2 tabular-nums">{fmtFecha(fechaDe(c))}</td>
-            <td className="py-2 px-2"><EstadoBadge comprobante={c} /></td>
+            <td className="py-2 px-2">
+              <span className="flex flex-wrap items-center gap-2"><EstadoBadge comprobante={c} /></span>
+            </td>
             <td className="py-2 px-2 text-right font-mono font-bold text-brand-400 tabular-nums whitespace-nowrap">{fmt(c.monto)}</td>
             <td className="py-1 px-4 text-right">
               {/* El clic burbujea a la fila; el botón aporta foco, teclado y 44 px. */}
@@ -80,13 +84,14 @@ function TablaTablet({ cliente, onAbrir }) {
 
 function ComprobanteEscritorio({ c }) {
   const clave = claveComprobante(c)
-  if (c.tipo === 'pago_parcial') {
+  // Pago parcial y Split Payment: una sola línea con el importe cobrado.
+  if (esLineaSimple(c)) {
     return (
-      <div key={clave} className="border-b border-surface-700/50 last:border-0 px-4 py-2.5
-                                  bg-yellow-500/5 flex items-center justify-between gap-3">
+      <div key={clave} className={`border-b border-surface-700/50 last:border-0 px-4 py-2.5
+                                  ${esSplit(c) ? 'bg-violet-500/5' : 'bg-yellow-500/5'} flex items-center justify-between gap-3`}>
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-surface-400 text-xs font-mono flex-shrink-0">#{c.idPresupuesto}</span>
-          <span className="text-surface-400 text-xs font-body flex-shrink-0">{fmtFecha(c.fecha)}</span>
+          <span className="text-surface-400 text-xs font-body flex-shrink-0">{fmtFecha(fechaDe(c))}</span>
           <EstadoBadge comprobante={c} />
         </div>
         <span className="text-brand-400 font-mono text-sm font-bold flex-shrink-0">{fmt(c.monto)}</span>

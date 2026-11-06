@@ -7,6 +7,7 @@ import { Pencil, Trash2 } from 'lucide-react'
 import { obtenerPresupuestos, actualizarMetadataPresupuesto } from '../../../services/presupuestosService'
 import { eliminarPresupuestoConReintegro } from '../../../services/presupuestosIdempotente'
 import { ErrorOperacion } from '../../../services/idempotencia'
+import { obtenerSplitsPorPresupuestos } from '../../../services/pagoSplitService'
 import { PAGE_SIZE, fmt, formatearFecha, Pagination, ConfirmModal, InfoBanner, dropdownClass } from './comunes'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -16,6 +17,10 @@ import { PAGE_SIZE, fmt, formatearFecha, Pagination, ConfirmModal, InfoBanner, d
 const ESTADO_COLOR = { borrador: 'gray', aprobado: 'blue', pagado: 'green', rechazado: 'red' }
 const METODO_LABEL = { efectivo: 'Efectivo', transferencia: 'Transferencia', cc30: 'CC 30d', cc15: 'CC 15d' }
 const ES_CC = (m) => m === 'cc30' || m === 'cc15'
+const ES_CONTADO = (m) => m === 'efectivo' || m === 'transferencia'
+
+// Split Payment: "40 %" sin ceros sobrantes.
+const fmtPct = (n) => `${Number(n).toLocaleString('es-AR', { maximumFractionDigits: 2 })} %`
 
 export default function Presupuestos() {
   const [rows, setRows] = useState([])
@@ -60,10 +65,24 @@ export default function Presupuestos() {
         limite:     PAGE_SIZE,
         offset,
       })
+      // Split Payment: sólo los pagados de contado pueden tener split. Es un dato
+      // informativo; si la lectura falla, el listado se muestra igual.
+      const idsContado = data
+        .filter(p => p.estado === 'pagado' && ES_CONTADO(p.metodoPago))
+        .map(p => p.idPresupuesto)
+      let splits = new Map()
+      if (idsContado.length) {
+        try {
+          splits = await obtenerSplitsPorPresupuestos(idsContado)
+        } catch (e) {
+          console.error('[Presupuestos] splits:', e)
+        }
+      }
       // Agregar clienteNombre para la tabla
       setRows(data.map(p => ({
         ...p,
         clienteNombre: [p.nombreCliente, p.apellidoCliente].filter(Boolean).join(' ') || '—',
+        split: splits.get(p.idPresupuesto) ?? null,
       })))
       setTotal(count)
     } catch (e) {
@@ -181,6 +200,10 @@ export default function Presupuestos() {
     && editRow.estado !== originalEstado && editRow.estado !== 'rechazado'
   const showCCRechazo = editRow && ES_CC(editRow.metodoPago)
     && editRow.estado !== originalEstado && editRow.estado === 'rechazado'
+  // Split Payment: si el presupuesto deja de estar 'pagado' o pasa a CC, la base
+  // descarta el detalle por método (queda como pago de método único).
+  const showSplitDescarte = editRow?.split
+    && (editRow.estado !== 'pagado' || ES_CC(editRow.metodoPago))
 
   return (
     <div className="space-y-4">
@@ -231,7 +254,16 @@ export default function Presupuestos() {
                 <Td className="text-surface-500 font-mono text-xs">#{r.idPresupuesto}</Td>
                 <Td className="text-surface-400">{formatearFecha(r.fecha)}</Td>
                 <Td>{r.clienteNombre}</Td>
-                <Td className="text-surface-400">{METODO_LABEL[r.metodoPago] ?? r.metodoPago}</Td>
+                <Td className="text-surface-400">
+                  {r.split ? (
+                    <span title={`Efectivo ${fmt(r.split.efectivo.monto)} · Transferencia ${fmt(r.split.transferencia.monto)}`}>
+                      Split Payment
+                      <span className="block text-[11px] text-surface-500 tabular-nums">
+                        Ef. {fmtPct(r.split.efectivo.porcentaje)} · Tr. {fmtPct(r.split.transferencia.porcentaje)}
+                      </span>
+                    </span>
+                  ) : (METODO_LABEL[r.metodoPago] ?? r.metodoPago)}
+                </Td>
                 <Td>{fmt(r.monto)}</Td>
                 <Td><Badge color={ESTADO_COLOR[r.estado] ?? 'gray'}>{r.estado.charAt(0).toUpperCase() + r.estado.slice(1)}</Badge></Td>
                 <Td>
@@ -255,6 +287,9 @@ export default function Presupuestos() {
 
             {showCCWarning && (
               <InfoBanner message="Atención: estás modificando solo el estado del presupuesto. El saldo de cuenta corriente asociado NO se actualiza automáticamente — podés revisarlo y ajustarlo en la sección Saldos." />
+            )}
+            {showSplitDescarte && (
+              <InfoBanner message="Este presupuesto se cobró con Split Payment. Con este cambio se descartará el detalle de importes por método (efectivo y transferencia)." />
             )}
             {showCCRechazo && (
               <InfoBanner message="Al rechazar este presupuesto de cuenta corriente, el saldo asociado será eliminado automáticamente." />
@@ -292,6 +327,11 @@ export default function Presupuestos() {
           ['Fecha', formatearFecha(confirmRow.fecha)],
           ['Monto', fmt(confirmRow.monto)],
           ['Estado', confirmRow.estado],
+          ...(confirmRow.split ? [
+            ['Pago', 'Split Payment'],
+            ['Efectivo', `${fmt(confirmRow.split.efectivo.monto)} (${fmtPct(confirmRow.split.efectivo.porcentaje)})`],
+            ['Transferencia', `${fmt(confirmRow.split.transferencia.monto)} (${fmtPct(confirmRow.split.transferencia.porcentaje)})`],
+          ] : []),
         ] : []}
         message="¿Eliminar este presupuesto y todos sus detalles?"
         // ⚠️ Esta acción borra el presupuesto ENTERO (detalle, saldo y cobros

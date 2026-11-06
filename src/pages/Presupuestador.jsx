@@ -40,7 +40,14 @@ const METODOS_BASE = [
   { value: 'cc30',          label: 'Cta. Cte. 30 días', factor: 1.105, texto: '10.5% recargo' },
 ]
 
-function today() { return new Date().toISOString().slice(0, 10) }
+// Fecha de HOY en hora LOCAL (YYYY-MM-DD). `toISOString()` devuelve la fecha en UTC:
+// en Argentina, después de las 21:00 daría el día siguiente y el presupuesto
+// quedaría con fecha futura (no se podría pagar hasta que pase el día).
+function today() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
 
 function fmt(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n ?? 0)

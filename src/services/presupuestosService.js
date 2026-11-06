@@ -2,6 +2,8 @@
 // Todas las operaciones de Presupuesto y DetallePresupuesto pasan por aquí.
 
 import { supabase } from '../lib/supabase'
+import { expandirLineaSplit } from '../lib/pagoSplit'
+import { obtenerSplitsPorPresupuestos } from './pagoSplitService'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -200,7 +202,19 @@ export async function obtenerPresupuestos({
   if (idCliente)   q = q.eq('id_cliente', idCliente)
   if (fechaDesde)  q = q.gte('fecha', fechaDesde)
   if (fechaHasta)  q = q.lte('fecha', fechaHasta)
-  if (metodoPago)  q = q.eq('metodo_pago', metodoPago)
+  if (metodoPago) {
+    // Split Payment: es una categoría PROPIA del filtro. `es_split` (ver
+    // sql/2026_split_payment_02_filtro_metodo.sql) separa los cobros divididos:
+    //   · 'split'                    → sólo los cobrados con split.
+    //   · 'efectivo'/'transferencia' → sólo método único (excluye los split).
+    if (metodoPago === 'split') {
+      q = q.eq('es_split', true)
+    } else if (metodoPago === 'efectivo' || metodoPago === 'transferencia') {
+      q = q.eq('metodo_pago', metodoPago).eq('es_split', false)
+    } else {
+      q = q.eq('metodo_pago', metodoPago)
+    }
+  }
   if (esExcepcion !== null) q = q.eq('es_excepcion', esExcepcion)
 
   // Búsqueda: si es número busca por ID exacto; si es texto busca nombre+apellido
@@ -491,6 +505,18 @@ export async function obtenerFacturasConDetalles(desde, hasta) {
 
   if (!presupuestosFiltrados.length && !pagosParciales.length) return []
 
+  // Split Payment (Facturas): un presupuesto de contado pagado con split se
+  // lista UNA vez por método, con SU porción. El filtro por fecha de pago ya
+  // lo resolvió la RPC (misma fila → mismo período en ambos listados), así
+  // que acá sólo se expande; los presupuestos sin split (incluidos los
+  // pagados antes de esta funcionalidad) pasan intactos.
+  const idsContado = presupuestosFiltrados
+    .filter(p => p.metodo_pago === 'efectivo' || p.metodo_pago === 'transferencia')
+    .map(p => p.id_presupuesto)
+  const splitsPromise = idsContado.length
+    ? obtenerSplitsPorPresupuestos(idsContado)
+    : Promise.resolve(new Map())
+
   let detallesPor = {}
   if (presupuestosFiltrados.length) {
     const ids = presupuestosFiltrados.map(p => p.id_presupuesto)
@@ -527,7 +553,9 @@ export async function obtenerFacturasConDetalles(desde, hasta) {
     }
   }
 
-  const lineasVenta = presupuestosFiltrados.map(p => ({
+  const splitsPor = await splitsPromise
+
+  const lineasVenta = presupuestosFiltrados.flatMap(p => expandirLineaSplit({
     tipo:             'venta',
     idPresupuesto:    p.id_presupuesto,
     idCliente:        p.id_cliente,
@@ -545,7 +573,7 @@ export async function obtenerFacturasConDetalles(desde, hasta) {
     // igual por transparencia/depuración.
     fechaFacturacion: p.fecha_facturacion,
     detalles:         detallesPor[p.id_presupuesto] ?? [],
-  }))
+  }, splitsPor.get(p.id_presupuesto)))
 
   // Orden cronológico: dentro de un mismo cliente/presupuesto, que los pagos
   // parciales se lean en el orden real en que se cobraron.
