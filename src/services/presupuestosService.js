@@ -455,8 +455,9 @@ async function _obtenerPagosParcialesFacturables(desde, hasta) {
         montoAplicado:   Number(a.monto_aplicado),
         fecha:           fechaPorPago.get(a.id_pago) ?? null,
         metodoPago:      pres?.metodo_pago         ?? null,
-        nombreCliente:   pres?.nombre_cliente       ?? cli?.nombre   ?? null,
-        apellidoCliente: pres?.apellido_cliente     ?? cli?.apellido ?? null,
+        // El cliente vivo (join) manda; la copia del presupuesto es solo respaldo.
+        nombreCliente:   cli?.nombre   ?? pres?.nombre_cliente   ?? null,
+        apellidoCliente: cli?.apellido ?? pres?.apellido_cliente ?? null,
         cuit:            cli?.cuit ?? null,
       }
     })
@@ -599,6 +600,9 @@ export async function obtenerFacturasConDetalles(desde, hasta) {
 
 // ─── Mutaciones ───────────────────────────────────────────────────────────────
 // Sin cambios — las mutaciones ya eran correctas y eficientes.
+// NOMBRE DE CLIENTE: ya no se envía nombre_cliente/apellido_cliente. Los deriva
+// la BD desde `cliente` (trigger trg_presupuesto_sincronizar_cliente), por lo
+// que nunca pueden quedar desactualizados.
 
 export async function crearPresupuesto(presupuesto, detalles) {
   const { data: pres, error: e1 } = await supabase
@@ -609,8 +613,6 @@ export async function crearPresupuesto(presupuesto, detalles) {
       metodo_pago:      presupuesto.metodoPago,
       monto_original:   presupuesto.montoOriginal ?? presupuesto.monto,
       monto:            presupuesto.monto,
-      nombre_cliente:   presupuesto.nombreCliente   ?? null,
-      apellido_cliente: presupuesto.apellidoCliente ?? null,
       estado:           presupuesto.estado          ?? 'borrador',
       es_excepcion:     Boolean(presupuesto.esExcepcion),
     })
@@ -651,8 +653,6 @@ export async function actualizarPresupuesto(idPresupuesto, presupuesto, detalles
       metodo_pago:      presupuesto.metodoPago,
       monto_original:   presupuesto.montoOriginal ?? presupuesto.monto,
       monto:            presupuesto.monto,
-      nombre_cliente:   presupuesto.nombreCliente   ?? null,
-      apellido_cliente: presupuesto.apellidoCliente ?? null,
       estado:           presupuesto.estado,
       es_excepcion:     Boolean(presupuesto.esExcepcion),
     })
