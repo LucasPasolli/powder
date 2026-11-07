@@ -14,11 +14,24 @@
 //   4. Si la contraseña es correcta: renderiza children
 //   5. Si es incorrecta: muestra error, permite reintentar
 //   6. El botón "Volver" navega a la página anterior sin conceder acceso
+//
+// Pantalla fija (sin scroll) mientras NO hay acceso concedido:
+//   • El gate se queda DENTRO del AppShell (sidebar, rail y topbar visibles). `useFillViewport`
+//     le da como alto "desde su posición hasta el borde inferior del viewport, menos el padding
+//     del contenedor": el documento mide exactamente el viewport y queda centrado en el área de
+//     contenido (antes `min-h-screen` + topbar + padding del <main> superaba 100vh y generaba
+//     scrollbar).
+//   • `useScrollLock` bloquea el viewport (<html>; no toca <body>, que usan el drawer y los
+//     diálogos) contra rueda, trackpad, teclado y gestos. Se libera en GRANTED o al desmontar,
+//     por lo que el resto de módulos no se ve afectado.
+//   • En alturas reducidas (móvil apaisado, teclado virtual) el contenido se compacta para
+//     seguir 100 % visible y utilizable sin scroll.
 
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Lock, Eye, EyeOff, ShieldAlert, Loader2 } from 'lucide-react'
 import { useSpecialAuth } from '../../lib/SpecialAuthContext'
+import { useScrollLock, useFillViewport } from '../../lib/useScrollLock'
 
 // ---------------------------------------------------------------------------
 // Estados internos del gate
@@ -30,6 +43,15 @@ const STATE = {
   GRANTED:   'granted',    // acceso concedido, renderizar children
   ERROR:     'error',      // error de red u otro no relacionado a contraseña
 }
+
+// Alto reducido (móvil apaisado / teclado virtual abierto).
+const CORTO = '[@media(max-height:600px)]'
+
+// Área de contenido sin desborde. El alto exacto lo fija useFillViewport; `h-[100dvh]` es
+// sólo el valor inicial hasta la primera medición (evita saltos de layout).
+const SHELL =
+  'w-full h-[100dvh] overflow-hidden overscroll-none flex items-center justify-center ' +
+  'px-0 py-0'
 
 // ---------------------------------------------------------------------------
 // Componente principal
@@ -53,6 +75,13 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
   const [attempts,     setAttempts]     = useState(0)
 
   const inputRef = useRef(null)
+  const shellRef = useRef(null)
+
+  // Sin scroll y ajustado al alto disponible mientras no haya acceso; se restablece al conceder
+  // (Escenario 5) y al desmontar (Escenario 6). El orden importa: primero el bloqueo.
+  const sinAcceso = gateState !== STATE.GRANTED
+  useScrollLock(sinAcceso, shellRef)
+  useFillViewport(shellRef, sinAcceso)
 
   // -------------------------------------------------------------------------
   // Verificación inicial al montar el componente
@@ -79,7 +108,7 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
   useEffect(() => {
     if (gateState === STATE.LOCKED && inputRef.current) {
       // Pequeño delay para que la animación de entrada termine
-      const t = setTimeout(() => inputRef.current?.focus(), 150)
+      const t = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 150)
       return () => clearTimeout(t)
     }
   }, [gateState])
@@ -109,7 +138,7 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
       setPassword('')
       setGateState(STATE.LOCKED)
       // Re-focus para que el usuario pueda reintentar sin hacer click
-      setTimeout(() => inputRef.current?.focus(), 50)
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 50)
     }
   }
 
@@ -120,16 +149,16 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
   // Cargando verificación inicial
   if (gateState === STATE.CHECKING) {
     return (
-      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-surface-400">
-          <Loader2 size={24} className="animate-spin text-brand-500" />
+      <div ref={shellRef} className={SHELL}>
+        <div className="flex flex-col items-center gap-3 text-surface-400" role="status" aria-live="polite">
+          <Loader2 size={24} className="animate-spin text-brand-500" aria-hidden="true" />
           <span className="text-sm font-body">Verificando acceso...</span>
         </div>
       </div>
     )
   }
 
-  // Acceso concedido — renderizar la página protegida
+  // Acceso concedido — renderizar la página protegida (el scroll ya se liberó vía hook)
   if (gateState === STATE.GRANTED) {
     return children
   }
@@ -140,17 +169,17 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
   const isVerifying = gateState === STATE.VERIFYING
 
   return (
-    <div className="min-h-screen bg-surface-900 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
+    <div ref={shellRef} className={SHELL}>
+      <div className="w-full max-w-sm max-h-full">
 
         {/* Tarjeta */}
-        <div className="bg-surface-800 border border-surface-700 rounded-2xl p-8 shadow-2xl">
+        <div className={`bg-surface-800 border border-surface-700 rounded-2xl p-8 ${CORTO}:p-5 shadow-2xl`}>
 
           {/* Ícono y título */}
-          <div className="flex flex-col items-center gap-4 mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-brand-500/10 border border-brand-500/20
-                            flex items-center justify-center">
-              <Lock size={24} className="text-brand-400" />
+          <div className={`flex flex-col items-center gap-4 mb-8 ${CORTO}:gap-2 ${CORTO}:mb-4`}>
+            <div className={`w-14 h-14 ${CORTO}:w-10 ${CORTO}:h-10 rounded-2xl bg-brand-500/10 border border-brand-500/20
+                            flex items-center justify-center`}>
+              <Lock size={24} className="text-brand-400" aria-hidden="true" />
             </div>
             <div className="text-center">
               <h1 className="text-white font-display text-xl font-semibold">
@@ -163,7 +192,7 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
           </div>
 
           {/* Formulario */}
-          <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <form onSubmit={handleSubmit} className={`space-y-4 ${CORTO}:space-y-2`} noValidate>
 
             {/* Input de contraseña */}
             <div className="space-y-1.5">
@@ -192,7 +221,7 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
                   placeholder="••••••••"
                   className={`
                     w-full bg-surface-900 border rounded-xl px-4 py-2.5 pr-11
-                    text-white font-body text-sm
+                    text-white font-body text-base sm:text-sm
                     placeholder:text-surface-600
                     focus:outline-none focus:ring-2 focus:ring-brand-500/50
                     disabled:opacity-50 disabled:cursor-not-allowed
@@ -213,16 +242,16 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
                   aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                 >
                   {showPassword
-                    ? <EyeOff size={16} />
-                    : <Eye size={16} />
+                    ? <EyeOff size={16} aria-hidden="true" />
+                    : <Eye size={16} aria-hidden="true" />
                   }
                 </button>
               </div>
 
               {/* Mensaje de error */}
               {errorMessage && (
-                <div className="flex items-center gap-2 text-red-400 text-xs font-body pt-0.5">
-                  <ShieldAlert size={13} className="flex-shrink-0" />
+                <div role="alert" className="flex items-center gap-2 text-red-400 text-xs font-body pt-0.5">
+                  <ShieldAlert size={13} className="flex-shrink-0" aria-hidden="true" />
                   <span>{errorMessage}</span>
                 </div>
               )}
@@ -236,7 +265,7 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
             </div>
 
             {/* Botones */}
-            <div className="flex gap-3 pt-2">
+            <div className={`flex gap-3 pt-2 ${CORTO}:pt-1`}>
               <button
                 type="button"
                 onClick={() => navigate(-1)}
@@ -262,7 +291,7 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
               >
                 {isVerifying ? (
                   <>
-                    <Loader2 size={14} className="animate-spin" />
+                    <Loader2 size={14} className="animate-spin" aria-hidden="true" />
                     <span>Verificando...</span>
                   </>
                 ) : (
@@ -275,8 +304,8 @@ export default function SpecialAuthGate({ pageKey, label, children }) {
 
         </div>
 
-        {/* Nota de seguridad */}
-        <p className="text-center text-surface-600 text-xs font-body mt-4">
+        {/* Nota de seguridad (se oculta en alturas muy reducidas para no forzar desborde) */}
+        <p className={`text-center text-surface-600 text-xs font-body mt-4 ${CORTO}:hidden`}>
           Esta sección requiere autorización independiente del inicio de sesión.
         </p>
 
