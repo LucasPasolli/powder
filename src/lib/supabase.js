@@ -24,38 +24,61 @@ if (!supabaseUrl.startsWith('https://')) {
   )
 }
 
+const PUBLISHABLE_PREFIX = 'sb_publishable_'
+const SECRET_PREFIX = 'sb_secret_'
+
 /**
- * Guardrail crítico: distingue una anon key de una service_role key
- * decodificando el claim "role" del JWT (sin validar firma, solo leemos
- * el payload — la validación real la hace el servidor de Supabase).
- *
- * La service_role key BYPASEA Row Level Security por completo. Si se
- * filtra al bundle del frontend por error (son dos keys parecidas en
- * el mismo dashboard de Supabase), cualquiera con las devtools tiene
- * acceso total de lectura/escritura a toda la base, sin importar las
- * políticas RLS configuradas. Frenamos la app antes de que eso llegue
- * a producción en vez de fallar silenciosamente.
+ * Devuelve el claim "role" de un JWT legacy, o null si no es decodificable.
+ * No valida la firma: solo lee el payload. La validación real la hace Supabase.
  */
-function assertIsAnonKey(jwt) {
+function readJwtRole(jwt) {
   try {
-    const payloadB64 = jwt.split('.')[1]
-    const payload = JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')))
-    if (payload.role !== 'anon') {
-      throw new Error(
-        `[supabase.js] VITE_SUPABASE_ANON_KEY tiene role="${payload.role}", se esperaba "anon". ` +
-        'Es muy probable que hayas pegado la service_role key por error. ' +
-        'Esa key NUNCA debe usarse en el frontend: bypasea RLS por completo.'
-      )
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('service_role')) throw err
-    // Si el JWT no se puede decodificar, dejamos que Supabase lo rechace
-    // más adelante en vez de bloquear el arranque por un parseo frágil.
-    console.warn('[supabase.js] No se pudo verificar el claim "role" de la key:', err)
+    const part = jwt.split('.')[1]
+    if (!part) return null
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+    return JSON.parse(atob(padded)).role ?? null
+  } catch {
+    return null
   }
 }
 
-assertIsAnonKey(supabaseKey)
+/**
+ * Guardrail crítico: impide arrancar el frontend con una key privilegiada.
+ *
+ * Formatos soportados:
+ *  - sb_publishable_…  → key pública del sistema nuevo. OK.
+ *  - sb_secret_…       → key privilegiada. BLOQUEA (bypasea RLS).
+ *  - JWT legacy        → el claim "role" debe ser "anon"; "service_role" BLOQUEA.
+ *
+ * Las excepciones se lanzan FUERA de cualquier try/catch para que nunca
+ * queden silenciadas.
+ */
+function assertIsClientSafeKey(key) {
+  if (key.startsWith(SECRET_PREFIX)) {
+    throw new Error(
+      '[supabase.js] VITE_SUPABASE_ANON_KEY contiene una secret key (sb_secret_…). ' +
+      'Esa key NUNCA debe usarse en el frontend: bypasea RLS por completo.'
+    )
+  }
+
+  if (key.startsWith(PUBLISHABLE_PREFIX)) return
+
+  const role = readJwtRole(key)
+  if (role === null) {
+    console.warn('[supabase.js] Formato de key no reconocido; Supabase la validará en el servidor.')
+    return
+  }
+  if (role !== 'anon') {
+    throw new Error(
+      `[supabase.js] VITE_SUPABASE_ANON_KEY tiene role="${role}", se esperaba "anon". ` +
+      'Es muy probable que hayas pegado la service_role key por error. ' +
+      'Esa key NUNCA debe usarse en el frontend: bypasea RLS por completo.'
+    )
+  }
+}
+
+assertIsClientSafeKey(supabaseKey)
 
 export const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
