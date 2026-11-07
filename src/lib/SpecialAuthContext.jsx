@@ -138,7 +138,6 @@ export function SpecialAuthProvider({ children }) {
   // -------------------------------------------------------------------------
   const revokeAccess = useCallback((pageKey) => {
     const entry = tokenMapRef.current[pageKey]
-    console.log('[revokeAccess] called at', Date.now(), 'entry:', JSON.stringify(entry))
 
     // Solo marcar si hay un token activo (revokedAt === null)
     if (!entry || entry.revokedAt !== null) return

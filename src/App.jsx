@@ -1,6 +1,7 @@
 // src/App.jsx
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth }        from './lib/AuthContext'
+import { buildLoginUrl }  from './lib/safeRedirect'
 import AppShell           from './components/layout/AppShell'
 import SpecialAuthGate    from './components/auth/SpecialAuthGate'
 import Login              from './pages/Login'
@@ -39,12 +40,14 @@ function LoadingScreen() {
  */
 function RequireAuth({ children }) {
   const { authed, loading } = useAuth()
+  const location = useLocation()
 
   // Mientras resolvemos la sesión: no redirigir, no renderizar
   if (loading) return <LoadingScreen />
 
   // Sesión resuelta y no autenticado: ir a login
-  if (!authed) return <Navigate to="/login" replace />
+  // Conserva el destino original; Login lo valida contra una allowlist.
+  if (!authed) return <Navigate to={buildLoginUrl(location.pathname)} replace />
 
   // Autenticado: renderizar dentro del shell
   return <AppShell>{children}</AppShell>
