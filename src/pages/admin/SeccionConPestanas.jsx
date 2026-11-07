@@ -5,10 +5,9 @@
 // rechazado modifica saldos, y el listado de Saldos no debe quedar desactualizado).
 import { Suspense, useEffect, useRef } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
 import { PageHeader, Spinner } from '../../components/ui'
 import LimiteError from './LimiteError'
-import { RUTA_PANEL } from './areas'
+import VolverAlPanel from './VolverAlPanel'
 import { rutaPestana } from './secciones'
 
 const BASE = 'flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border px-4 font-body text-sm transition-colors ' +
@@ -37,11 +36,7 @@ export default function SeccionConPestanas({ slug, seccion }) {
 
   return (
     <div className="mx-auto max-w-6xl min-w-0 space-y-6">
-      <Link to={RUTA_PANEL}
-        className="inline-flex min-h-[44px] items-center gap-2 rounded-lg font-body text-sm text-surface-200 hover:text-white
-                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
-        <ArrowLeft size={16} aria-hidden="true" /> Panel Administrativo
-      </Link>
+      <VolverAlPanel />
 
       <PageHeader title={titulo} subtitle={subtitulo} />
 

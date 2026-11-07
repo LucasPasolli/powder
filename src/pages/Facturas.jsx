@@ -16,6 +16,7 @@ import PanelFiltros from '../components/facturas/PanelFiltros'
 import ResumenPeriodo from '../components/facturas/ResumenPeriodo'
 import ListadoFacturas from '../components/facturas/ListadoFacturas'
 import { TOQUE } from '../components/facturas/estilos'
+import VolverAlPanel from './admin/VolverAlPanel'
 
 const TITULOS = {
   noEfectivo: { pantalla: 'Transferencia y Cuenta Corriente', pdf: 'Factura — Transferencia y Cuenta Corriente' },
@@ -100,6 +101,7 @@ export default function Facturas() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 min-w-0">
+      <VolverAlPanel />
       <PageHeader title="Facturas" subtitle="Generar documento" />
 
       {!online && (
