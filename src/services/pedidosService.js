@@ -18,6 +18,8 @@ const MENSAJES_ERROR_PEDIDO = {
   estado_invalido:      'El estado indicado no es válido.',
   metodo_pago_invalido: 'El método de pago indicado no es válido.',
   no_autorizado:        'No tenés permisos para realizar esta operación.',
+  // Recepción: una línea de un producto "con medidas" no tiene medida asignada.
+  medida_requerida:     'Hay productos con medidas sin medida asignada. Editá el pedido y elegí la medida antes de recibirlo.',
 }
 
 function manejarErrorRpc(operacion, error) {

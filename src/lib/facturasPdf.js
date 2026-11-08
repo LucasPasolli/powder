@@ -5,7 +5,7 @@
 // Antes `doc.save()` hacía todo junto y en iOS Safari / WebViews no era
 // confiable; descargar un Blob con <a download> sí lo es.
 
-import { fmt, fmtFecha } from './facturas'
+import { ESTADO_LABEL, esLineaSimple, esSplit, estadoDe, fechaDe, fmt, fmtFecha } from './facturas'
 
 /** Nombre de archivo seguro: sin tildes, espacios ni caracteres de ruta. */
 export function nombreArchivo(titulo, desde, hasta) {
@@ -13,6 +13,19 @@ export function nombreArchivo(titulo, desde, hasta) {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^\w.-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
   return `${base}_${fmtFecha(desde)}_${fmtFecha(hasta)}.pdf`
+}
+
+
+/**
+ * Texto de una línea de cobro simple (pago parcial o Split Payment). Misma
+ * regla para ambos: sin ítems ni desglose, sólo etiqueta + importe cobrado.
+ * Pura y exportada para poder testearla.
+ * @param {import('./facturas').Comprobante} c
+ */
+export function describirCobroSimple(c) {
+  const etiqueta = esSplit(c) ? 'Split Payment' : 'Pago parcial recibido'
+  const metodo   = ESTADO_LABEL[c.metodoPago] ?? c.metodoPago
+  return `${etiqueta} — Presupuesto #${c.idPresupuesto} — ${fmtFecha(fechaDe(c))} — ${metodo}`
 }
 
 /**
@@ -105,24 +118,17 @@ export async function construirPDF(grupos, titulo, desde, hasta) {
     for (const pres of cliente.presupuestos) {
       checkPage(20)
 
-      const metodoLabel = { efectivo: 'Efectivo', transferencia: 'Transferencia', cc15: 'CC 15d', cc30: 'CC 30d' }
-
-      // CORRECCIÓN (Pago Parcial): línea de cobro puntual — no tiene ítems
-      // propios (esos ya se facturaron en el presupuesto original, que puede
-      // haberse listado en otro período). Se muestra el monto efectivamente
-      // cobrado y la fecha de ESE pago, resaltado para diferenciarlo de una
-      // venta completa.
-      if (pres.tipo === 'pago_parcial') {
-        doc.setFillColor(255, 248, 235)
+      // Pago parcial y Split Payment: línea de cobro puntual (ver esLineaSimple).
+      // Sin ítems propios (figuran en el presupuesto original); sólo el importe
+      // efectivamente cobrado, resaltado para diferenciarlo de una venta completa.
+      if (esLineaSimple(pres)) {
+        doc.setFillColor(...(esSplit(pres) ? [245, 240, 255] : [255, 248, 235]))
         doc.roundedRect(ML + 2, y - 4, CW - 4, 9, 1.5, 1.5, 'F')
 
         doc.setFontSize(8)
         doc.setFont('helvetica', 'italic')
         doc.setTextColor(120, 120, 120)
-        doc.text(
-          `Pago parcial recibido — Presupuesto #${pres.idPresupuesto} — ${fmtFecha(pres.fecha)} — ${metodoLabel[pres.metodoPago] ?? pres.metodoPago}`,
-          ML + 4, y + 1.5
-        )
+        doc.text(describirCobroSimple(pres), ML + 4, y + 1.5)
 
         doc.setFont('helvetica', 'bold')
         doc.setTextColor(...NARANJA)
@@ -136,7 +142,7 @@ export async function construirPDF(grupos, titulo, desde, hasta) {
       doc.setFont('helvetica', 'italic')
       doc.setTextColor(120, 120, 120)
       doc.text(
-        `Presupuesto #${pres.idPresupuesto} — ${fmtFecha(pres.fechaFacturacion)} — ${metodoLabel[pres.metodoPago] ?? pres.metodoPago}`,
+        `Presupuesto #${pres.idPresupuesto} — ${fmtFecha(pres.fechaFacturacion)} — ${ESTADO_LABEL[estadoDe(pres)] ?? pres.metodoPago}`,
         ML + 4, y
       )
       y += 5
@@ -160,7 +166,10 @@ export async function construirPDF(grupos, titulo, desde, hasta) {
           fmt(it.subtotalNeto),
         ]),
         foot: [[
-          { content: 'Total con IVA', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold' } },
+          {
+            content: 'Total con IVA',
+            colSpan: 3, styles: { halign: 'right', fontStyle: 'bold' },
+          },
           { content: fmt(pres.monto), styles: { fontStyle: 'bold', textColor: NARANJA } },
         ]],
         styles:     { fontSize: 7.5, cellPadding: 2.5, textColor: GRIS },

@@ -1,8 +1,8 @@
 // src/pages/Dashboard.jsx
 import { Link } from 'react-router-dom'
 import {
-  FileText, Clock, Package, Receipt,
-  BarChart2, ShoppingCart, Wallet, ArrowRight, Tag
+  FileText, Clock, Package,
+  Settings2, ShoppingCart, Wallet, ArrowRight, Tag
 } from 'lucide-react'
 import { useEffect, useState, useCallback } from 'react'
 import { obtenerDatosDashboard } from '../services/dashboardService'
@@ -51,18 +51,11 @@ const SECTIONS = [
     accent:      'from-orange-500 to-orange-600',
   },  
   {
-    to:          '/facturas',
-    icon:        Receipt,
-    label:       'Facturas',
-    description: 'Generá y exportá documentos de factura en PDF por período.',
+    to:          '/admin',
+    icon:        Settings2,
+    label:       'Panel Administrativo',
+    description: 'Facturas, estadísticas, finanzas, terceros y ventas en un solo lugar.',
     accent:      'from-violet-500 to-violet-600',
-  },
-  {
-    to:          '/estadisticas',
-    icon:        BarChart2,
-    label:       'Estadísticas',
-    description: 'Ingresos, egresos y métricas clave del negocio.',
-    accent:      'from-yellow-500 to-yellow-600',
   },
 ]
 

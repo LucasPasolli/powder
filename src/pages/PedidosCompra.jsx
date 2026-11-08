@@ -42,6 +42,11 @@ import PedidosListado from '../components/pedidos/PedidosListado'
 import PaginadorTabla from '../components/ui/PaginadorTabla'
 import { CuotasPlanDetalle, ItemsPedidoDetalle } from '../components/pedidos/PedidoDetalleListas'
 import { TOUCH, ESTADO_CONFIG, cap, fmt, fmtFecha, metodoPagoLabel } from '../components/pedidos/pedidosPresentacion'
+import { obtenerTieneMedidasPorProductos } from '../services/productosService'
+import {
+  MEDIDAS_VALIDAS, MODO_MEDIDAS, modoMedidaDeItem, medidaParaEnvio,
+  pedidoEstaCerrado, validarMedidasItems, lineaSeEnvia,
+} from '../lib/medidasProducto'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -329,21 +334,16 @@ const ITEM_GRID =
   'grid grid-cols-[2rem_5rem_minmax(12rem,1fr)_7rem_8rem_9rem_9rem_2.5rem] items-center gap-x-2 px-1 py-2'
 
 
-function ItemRow({ item, index, onUpdate, onRemove, disabled = false, isDesktop = true }) {
+function ItemRow({ item, index, onUpdate, onRemove, disabled = false, isDesktop = true, errorMedida = null, pedidoCerrado = false }) {
   const uid = useId()
   const [nombreSearch,   setNombreSearch]   = useState(item.nombreProducto || '')
   const [nombreResults,  setNombreResults]  = useState([])
   const [showDrop,       setShowDrop]       = useState(false)
   const [dropPos,        setDropPos]        = useState({ top: 0, left: 0, width: 0, above: false })
-  const [medidas,        setMedidas]        = useState([])
-  // En edición el padre ya trajo las medidas con el JOIN de carga del pedido:
-  // se usan tal cual y NO se consulta nada por ítem. Se indexan por producto para
-  // que, si el usuario cambia el producto de la fila, se vuelva a consultar.
-  const precargadas = useRef(
-    Array.isArray(item.medidasPrecargadas)
-      ? { idProducto: String(item.idProducto), medidas: item.medidasPrecargadas }
-      : null
-  )
+  // El atributo `tieneMedidas` vive en el ÍTEM (lo fija el padre al abrir el pedido
+  // y esta fila al elegir el producto): así la validación del guardado lo ve sin
+  // consultas por ítem. Ya no se derivan "medidas disponibles" de producto_medida.
+  const reqIdProducto = useRef(0) // descarta respuestas tardías al tipear el ID
   const inputRef = useRef(null)
   const wrapRef  = useRef(null)
   const dropRef  = useRef(null)
@@ -394,38 +394,13 @@ function ItemRow({ item, index, onUpdate, onRemove, disabled = false, isDesktop 
     }
   }, [item.nombreProducto])
 
-  // Cargar medidas si el producto las tiene
-  useEffect(() => {
-    if (!item.idProducto) { setMedidas([]); return }
-
-    const pre = precargadas.current
-    if (pre && pre.idProducto === String(item.idProducto)) { setMedidas(pre.medidas); return }
-
-    let cancelado = false
-    async function fetchMedidas() {
-      // UNA consulta con relación (antes: 2 consultas secuenciales por ítem).
-      const { data: prod } = await supabase
-        .from('producto')
-        .select('tiene_medidas, producto_medida ( medida )')
-        .eq('id_producto', parseInt(item.idProducto))
-        .single()
-      if (cancelado) return
-      if (prod?.tiene_medidas) {
-        setMedidas((prod.producto_medida ?? []).map(r => r.medida).sort())
-      } else {
-        setMedidas([])
-        onUpdate(index, 'medida', null)
-      }
-    }
-    fetchMedidas()
-    return () => { cancelado = true }
-  }, [item.idProducto])
-
   async function buscarPorNombre(text) {
     setNombreSearch(text)
     onUpdate(index, 'nombreProducto', text)
     onUpdate(index, 'idProducto', '')
     onUpdate(index, 'precioUnitario', '')
+    onUpdate(index, 'tieneMedidas', false)
+    onUpdate(index, 'medida', null)
     if (!text.trim()) { setNombreResults([]); setShowDrop(false); return }
 
     const normText = norm(text.trim())
@@ -453,6 +428,8 @@ function ItemRow({ item, index, onUpdate, onRemove, disabled = false, isDesktop 
     setShowDrop(false)
     onUpdate(index, 'idProducto',     p.idProducto)
     onUpdate(index, 'nombreProducto', p.nombre)
+    // Escenarios 1 y 2: el atributo vigente del producto decide el cuadrante.
+    onUpdate(index, 'tieneMedidas', Boolean(p.tieneMedidas))
     if (p.precioProveedor > 0) {
       onUpdate(index, 'precioUnitario', p.precioProveedor)
     } else {
@@ -469,22 +446,28 @@ function ItemRow({ item, index, onUpdate, onRemove, disabled = false, isDesktop 
       onUpdate(index, 'nombreProducto', '')
       onUpdate(index, 'precioUnitario', '')
       onUpdate(index, 'medida', null)
+      onUpdate(index, 'tieneMedidas', false)
       return
     }
+    const miRequest = ++reqIdProducto.current
     const { data: p } = await supabase
       .from('producto')
       .select('*')
       .eq('id_producto', parseInt(clean))
       .single()
+    if (miRequest !== reqIdProducto.current) return // el usuario siguió tipeando
     if (p) {
       setNombreSearch(p.nombre)
       onUpdate(index, 'nombreProducto', p.nombre)
       onUpdate(index, 'precioUnitario', (p.precio_proveedor ?? 0) > 0 ? p.precio_proveedor : '')
       onUpdate(index, 'medida', null)
+      onUpdate(index, 'tieneMedidas', Boolean(p.tiene_medidas))
     } else {
       setNombreSearch('')
       onUpdate(index, 'nombreProducto', '')
       onUpdate(index, 'precioUnitario', '')
+      onUpdate(index, 'medida', null)
+      onUpdate(index, 'tieneMedidas', false)
     }
   }
 
@@ -563,22 +546,53 @@ function ItemRow({ item, index, onUpdate, onRemove, disabled = false, isDesktop 
     </div>
   )
 
-  const cMedida = (medidas.length > 0 || isDesktop) && (
+  // ── Cuadrante de medidas ───────────────────────────────────────────────────
+  // Fuente de verdad ÚNICA: el atributo vigente del producto (`item.tieneMedidas`),
+  // NO la existencia de filas en producto_medida (Escenarios 1, 2 y 5).
+  //   editable     → select con el catálogo completo; obligatorio (Escenario 7).
+  //   solo_lectura → líneas existentes de pedidos cerrados, o con medida ya guardada
+  //                  de un producto que pasó a "sin medidas": se ve, no se toca ni se
+  //                  exige, y viaja intacta al guardar (Escenarios 4 y 6).
+  //   oculto       → producto sin medidas (en escritorio queda la celda "—").
+  const modoMedida = modoMedidaDeItem(item, { pedidoCerrado })
+  const idErrMedida = `${uid}-medida-err`
+
+  const cMedida = (modoMedida !== MODO_MEDIDAS.OCULTO || isDesktop) && (
     <div role={isDesktop ? 'cell' : undefined}>
-      {medidas.length > 0 ? (
+      {modoMedida === MODO_MEDIDAS.EDITABLE && (
         <>
           {lab('medida', 'Medida')}
           <select id={`${uid}-medida`} value={item.medida || ''}
             onChange={e => onUpdate(index, 'medida', e.target.value)}
             disabled={disabled}
-            className="w-full bg-surface-700 border border-surface-600 rounded-lg px-2 py-1.5 text-white text-base
-                       min-[1025px]:text-sm font-body focus:outline-none focus:border-brand-500 cursor-pointer
-                       min-h-[44px] min-[1025px]:min-h-0 disabled:opacity-40 disabled:cursor-not-allowed">
+            aria-required="true"
+            aria-invalid={errorMedida ? 'true' : undefined}
+            aria-describedby={errorMedida ? idErrMedida : undefined}
+            data-medida-invalid={errorMedida ? 'true' : undefined}
+            className={`w-full bg-surface-700 border ${errorMedida ? 'border-red-500' : 'border-surface-600'}
+                       rounded-lg px-2 py-1.5 text-white text-base min-[1025px]:text-sm font-body
+                       focus:outline-none focus:border-brand-500 cursor-pointer
+                       min-h-[44px] min-[1025px]:min-h-0 disabled:opacity-40 disabled:cursor-not-allowed`}>
             <option value="">— medida —</option>
-            {medidas.map(m => <option key={m} value={m}>{m}</option>)}
+            {MEDIDAS_VALIDAS.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
+          {errorMedida && (
+            <p id={idErrMedida} className="mt-1 flex items-start gap-1 text-red-400 text-sm min-[1025px]:text-xs font-body">
+              <AlertCircle size={12} className="flex-shrink-0 mt-0.5" aria-hidden="true" />{errorMedida}
+            </p>
+          )}
         </>
-      ) : (
+      )}
+      {modoMedida === MODO_MEDIDAS.SOLO_LECTURA && (
+        <div>
+          {!isDesktop && <span className="block text-surface-300 text-sm font-body mb-1" aria-hidden="true">Medida</span>}
+          <span className="px-2 text-surface-200 text-sm min-[1025px]:text-xs font-mono"
+                title="Medida ya registrada en este pedido (no editable)">
+            <span className="sr-only">Medida registrada, no editable: </span>{item.medida || '—'}
+          </span>
+        </div>
+      )}
+      {modoMedida === MODO_MEDIDAS.OCULTO && (
         <span className="text-surface-500 text-sm min-[1025px]:text-xs px-2">—</span>
       )}
     </div>
@@ -1056,7 +1070,7 @@ function IconoGuardando({ className = '', ...rest }) {
   return <Loader2 {...rest} className={`${className} animate-spin`} aria-hidden="true" />
 }
 
-const ITEM_EMPTY = () => ({ idProducto: '', nombreProducto: '', cantidad: 1, precioUnitario: '', medida: null })
+const ITEM_EMPTY = () => ({ idProducto: '', nombreProducto: '', cantidad: 1, precioUnitario: '', medida: null, tieneMedidas: false })
 
 const METODOS_PAGO = [
   { value: 'efectivo',         label: 'Efectivo' },
@@ -1077,6 +1091,7 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
   const [proveedor,  setProveedor]  = useState(null)
   const [toast,      setToast]      = useState('')
   const [error,      setError]      = useState('')
+  const [erroresMedida, setErroresMedida] = useState({}) // índice de ítem → mensaje (Escenario 7)
   const [saving,     setSaving]     = useState(false)
   const savingRef                   = useRef(false)   // guardia síncrona contra doble-click
   const [guardandoLento, setGuardandoLento] = useState(false) // feedback si el guardado tarda > 1 s
@@ -1115,8 +1130,12 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
   // editable libremente, igual que antes.
   const hayCuotaPagada = esEdicion && cuotasPagadas.length > 0
 
+  // Escenario 4: en un pedido recibido / pagado / anulado (o con cuotas ya pagadas,
+  // que congelan las líneas) las líneas existentes no exigen ni habilitan medida.
+  const pedidoCerrado = esEdicion && (pedidoEstaCerrado(pedidoEditando) || hayCuotaPagada)
+
   // En edición: UNA sola consulta con relaciones trae pedido + proveedor + ítems
-  // (con las medidas disponibles de cada producto) + plan de cuotas.
+  // (con el atributo `tiene_medidas` vigente de cada producto) + plan de cuotas.
   // Antes: 3 consultas fijas + 2 por ítem (medidas) → crecía con N.
   useEffect(() => {
     if (!esEdicion) return
@@ -1135,7 +1154,8 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
             cantidad:           d.cantidad,
             precioUnitario:     d.precioUnitario,
             medida:             d.medida || null,
-            medidasPrecargadas: d.medidasDisponibles,       // evita fetch por ítem en ItemRow
+            tieneMedidas:       d.tieneMedidas,             // atributo vigente (JOIN de carga)
+            idProductoOriginal: d.idProducto,               // distingue línea existente de línea recambiada
           })))
         }
         if (prov) setProveedor(prov)
@@ -1175,9 +1195,20 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
 
   function updateItem(idx, key, val) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, [key]: val } : it))
+    // El error de medida de una línea se limpia apenas el usuario la corrige.
+    if (key === 'medida' || key === 'idProducto' || key === 'tieneMedidas') {
+      setErroresMedida(prev => {
+        if (prev[idx] === undefined) return prev
+        const { [idx]: _quitado, ...resto } = prev
+        return resto
+      })
+    }
   }
   function addItem()       { setItems(prev => [...prev, ITEM_EMPTY()]) }
-  function removeItem(idx) { setItems(prev => prev.filter((_, i) => i !== idx)) }
+  function removeItem(idx) {
+    setItems(prev => prev.filter((_, i) => i !== idx))
+    setErroresMedida({}) // los índices se corren: se revalida en el próximo guardado
+  }
 
   async function guardar() {
     // Protección síncrona: si ya hay un guardado en curso, ignorar clicks adicionales
@@ -1212,15 +1243,47 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
         return
       }
 
+      // ── Medidas (Escenarios 2 y 7) ─────────────────────────────────────────
+      // `tiene_medidas` se relee UNA vez (una sola query para todos los ítems, no
+      // una por ítem) por si cambió en Inventario con el formulario abierto. Si la
+      // relectura falla se sigue con lo cargado: el servidor revalida igual.
+      let itemsActuales = items
+      try {
+        const flags = await obtenerTieneMedidasPorProductos(validItems.map(it => it.idProducto))
+        if (flags.size > 0) {
+          itemsActuales = items.map(it => flags.has(Number(it.idProducto))
+            ? { ...it, tieneMedidas: flags.get(Number(it.idProducto)) }
+            : it)
+          setItems(itemsActuales)
+        }
+      } catch { /* best-effort */ }
+
+      const erroresM = validarMedidasItems(itemsActuales, { pedidoCerrado })
+      setErroresMedida(erroresM)
+      const conError = Object.keys(erroresM).map(Number)
+      if (conError.length) {
+        const nums = conError.map(i => i + 1).join(', ')
+        setError(conError.length === 1
+          ? `Elegí la medida del ítem ${nums} (campo marcado en rojo).`
+          : `Elegí la medida de los ítems ${nums} (campos marcados en rojo).`)
+        requestAnimationFrame(() => {
+          const el = document.querySelector('[data-medida-invalid="true"]')
+          const reducir = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+          el?.scrollIntoView({ block: 'center', behavior: reducir ? 'auto' : 'smooth' })
+          el?.focus({ preventScroll: true })
+        })
+        return
+      }
+
       const detallesPayload = []
-      for (const it of validItems) {
+      for (const it of itemsActuales.filter(lineaSeEnvia)) {
         const precio = parseFloat(String(it.precioUnitario).replace(',', '.')) || 0
         if (precio <= 0) { setError(`Ingresá el precio del proveedor para "${it.nombreProducto || `ID ${it.idProducto}`}".`); return }
         detallesPayload.push({
           idDetallePedido: it.idDetallePedido ?? null,   // presente = ítem existente (diff)
           idProducto:      parseInt(it.idProducto),
           nombreProducto:  it.nombreProducto || null,
-          medida:          it.medida || null,
+          medida:          medidaParaEnvio(it, { pedidoCerrado }), // oculto → null; solo lectura → intacta
           cantidad:        parseInt(it.cantidad),
           precioUnitario:  precio,
         })
@@ -1447,7 +1510,8 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
             )}
             {items.map((item, idx) => (
               <ItemRow key={idx} item={item} index={idx} onUpdate={updateItem} onRemove={removeItem}
-                disabled={hayCuotaPagada || saving} isDesktop={isDesktop} />
+                disabled={hayCuotaPagada || saving} isDesktop={isDesktop}
+                errorMedida={erroresMedida[idx] ?? null} pedidoCerrado={pedidoCerrado} />
             ))}
           </div>
         </div>

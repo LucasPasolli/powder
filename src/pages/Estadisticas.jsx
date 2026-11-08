@@ -29,6 +29,7 @@ import { colorDemora, fmt, fmtCompacto, fmtDemora, pct } from '../components/est
 import { useFiltrosEstadisticas } from '../hooks/useFiltrosEstadisticas'
 import { useMetricasEstadisticas } from '../hooks/useMetricasEstadisticas'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
+import VolverAlPanel from './admin/VolverAlPanel'
 
 const TOQUE = 'justify-center min-h-[44px] min-[1025px]:min-h-0'
 const GRID_2 = 'grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4'
@@ -52,6 +53,7 @@ export default function Estadisticas() {
   if (!m) {
     return (
       <div className="max-w-6xl mx-auto space-y-4">
+        <VolverAlPanel />
         <PageHeader title="Estadísticas" subtitle="Panel de métricas" />
         {error ? (
           <Card className="p-6 text-center" >
@@ -79,6 +81,7 @@ export default function Estadisticas() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6 min-w-0" aria-busy={cargando}>
+      <VolverAlPanel />
       <PageHeader title="Estadísticas" subtitle="Panel de métricas"
         actions={(
           <Button variant="secondary" aria-pressed={mostrarExacto} className={TOQUE}

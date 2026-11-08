@@ -4,6 +4,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import Presupuestador from './Presupuestador'
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
+import DateField from '../components/ui/DateField'
+import { ALTO_CONTROL } from '../components/ui/controles'
 import {
   Search, ChevronDown, ChevronUp, ArrowLeft, FileText,
   Clock, CheckCircle2, XCircle, ThumbsUp, AlertCircle, Trash2, Download, Pencil, X, Wallet, Tag
@@ -24,6 +26,10 @@ import {
 } from '../services/saldosService'
 import { useAsyncAction } from '../hooks/useAsyncAction'
 import { useClaveIdempotencia } from '../lib/idempotency'
+import { usePagoSplit } from '../hooks/usePagoSplit'
+import PagoSplitCampos from '../components/presupuestos/PagoSplitCampos'
+import { registrarPagoSplit, obtenerPagoSplit, obtenerSplitsPorPresupuestos, ErrorPagoSplit } from '../services/pagoSplitService'
+import { esMetodoElegibleSplit, ETIQUETA_METODO, METODOS_SPLIT, fmtPct } from '../lib/pagoSplit'
 import { useDebounce } from '../hooks/useDebounce'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
 import { derivarFactorAjustable, tienePromocion } from '../lib/calculoPresupuesto'
@@ -36,6 +42,17 @@ const METODOS_PAGO = {
   cc15:          { label: 'Cta. Cte. 15 días', badge: 'yellow' },
   cc30:          { label: 'Cta. Cte. 30 días', badge: 'orange' },
 }
+// Opciones del filtro "Método": los métodos + "Split Payment" como categoría propia
+// (no se mezcla con Efectivo ni Transferencia). Sólo para el <select>.
+const METODOS_FILTRO = {
+  efectivo:      METODOS_PAGO.efectivo,
+  transferencia: METODOS_PAGO.transferencia,
+  split:         { label: 'Split Payment', badge: 'violet' },
+  cc15:          METODOS_PAGO.cc15,
+  cc30:          METODOS_PAGO.cc30,
+}
+// Cobro de contado (nunca pasa por Cuenta Corriente): efectivo, transferencia o split.
+const esFiltroContado = (m) => m === 'efectivo' || m === 'transferencia' || m === 'split'
 const ESTADOS = {
   borrador:  { label: 'Borrador',  color: 'gray'  },
   aprobado:  { label: 'Aprobado',  color: 'blue'  },
@@ -143,6 +160,12 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
   const [reactivando,     setReactivando]     = useState(false)
   const [errorReactivar,  setErrorReactivar]  = useState('')
   const [fechaVtoInput,   setFechaVtoInput]   = useState('')
+  // Split Payment: detalle persistido (si el cobro se dividió) y estado del
+  // formulario del modal. Ver lib/pagoSplit.js (aritmética) y la RPC
+  // `fn_registrar_pago_split` (persistencia atómica + idempotente).
+  // Arranca con el split que ya trajo el listado (evita parpadeo del método).
+  const [pagoSplit, setPagoSplit] = useState(presInit.split ?? null)
+  const split = usePagoSplit(pres.monto)
 
   // Memoizado para que las sumas de detalles no se recalculen en cada render
   // del detalle (p.ej. al abrir/cerrar modales).
@@ -157,17 +180,20 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
   const reload = useCallback(async () => {
     setLoading(true)
     try {
-      const [p, rows, sal, cl] = await Promise.all([
+      const [p, rows, sal, cl, ps] = await Promise.all([
         obtenerPresupuestoPorId(pres.idPresupuesto),
         obtenerDetallesDePresupuesto(pres.idPresupuesto),
         obtenerSaldoPorPresupuesto(pres.idPresupuesto),
         // cliente eliminado → null (no debe tumbar el resto de la carga)
         obtenerClientePorId(pres.idCliente).catch(() => null),
+        // sin split (o lectura fallida) → se muestra el método único de siempre
+        obtenerPagoSplit(pres.idPresupuesto).catch(() => null),
       ])
       if (p) setPres(p)
       setDetalles(rows)
       setSaldo(sal)
       setCliente(cl)
+      setPagoSplit(ps)
     } catch (err) {
       console.error('[PresupuestoDetalle] Error recargando:', err)
     } finally {
@@ -178,6 +204,8 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
   useEffect(() => { reload() }, [reload])
 
   const esCC        = pres.metodoPago === 'cc15' || pres.metodoPago === 'cc30'
+  // Split Payment sólo para contado (Escenarios 1 y 2): CC y otros no lo ven.
+  const puedeSplit  = esMetodoElegibleSplit(pres.metodoPago)
   const esExcepcion = pres.esExcepcion === 1
   const estado      = ESTADOS[pres.estado]  ?? ESTADOS.borrador
   const metodo      = METODOS_PAGO[pres.metodoPago] ?? { label: pres.metodoPago, badge: 'gray' }
@@ -205,6 +233,9 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
   // lo ya aplicado en vez de volver a descontar stock.
   const { leer: leerClave, rotar: rotarClave } = useClaveIdempotencia()
   useEffect(() => { if (modal) rotarClave() }, [modal, rotarClave])
+  // El Split arranca siempre desactivado y vacío al abrir "Registrar pago".
+  const { reiniciar: reiniciarSplit } = split
+  useEffect(() => { if (modal === 'pagar') reiniciarSplit() }, [modal, reiniciarSplit])
 
   /**
    * Aprobar / pagar / rechazar: UNA llamada a `cambiar_estado_presupuesto`.
@@ -235,12 +266,27 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
       }
     }
 
-    const res = await cambiarEstadoPresupuestoIdempotente({
-      clave:         leerClave(),
-      idPresupuesto: pres.idPresupuesto,
-      nuevoEstado,
-      fechaPago:     requiereFechaPago ? fechaPagoInput : null,
-    })
+    // Split Payment: UNA llamada atómica (estado + fecha + ambos importes) e
+    // idempotente por clave. Sin split el flujo es EXACTAMENTE el de siempre.
+    const usaSplit = requiereFechaPago && puedeSplit && split.activo
+    if (usaSplit && !split.valido) {
+      setErrorModal('Revisá los importes del Split Payment.')
+      return
+    }
+
+    const res = usaSplit
+      ? await registrarPagoSplit({
+          clave:         leerClave(),
+          idPresupuesto: pres.idPresupuesto,
+          fechaPago:     fechaPagoInput,
+          split:         split.payload,
+        })
+      : await cambiarEstadoPresupuestoIdempotente({
+          clave:         leerClave(),
+          idPresupuesto: pres.idPresupuesto,
+          nuevoEstado,
+          fechaPago:     requiereFechaPago ? fechaPagoInput : null,
+        })
     rotarClave() // la próxima acción es otra intención
 
     // Feedback inmediato: el estado nuevo ya es un hecho confirmado por la BD.
@@ -258,9 +304,9 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
     onError: (err) => {
       // La clave quedó atada a otro contenido (p. ej. se cambió la fecha tras
       // un intento fallido): se rota para que el próximo clic sea una intención nueva.
-      if (err?.codigo === CODIGOS.CLAVE_REUTILIZADA) rotarClave()
+      if (err?.codigo === CODIGOS.CLAVE_REUTILIZADA || err?.rotarClave) rotarClave()
       setErrorModal(
-        err instanceof ErrorOperacion
+        err instanceof ErrorOperacion || err instanceof ErrorPagoSplit
           ? err.message
           : err?.codigo === 'TIMEOUT'
             ? 'La operación está tardando más de lo normal. Actualizá la pantalla para verificar si se aplicó antes de reintentar.'
@@ -381,8 +427,16 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
           <div className="bg-surface-700 rounded-xl p-4">
             <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Método</p>
             <p className="text-white text-sm font-body">
-              {esExcepcion ? `Excepción (${metodo.label})` : metodo.label}
+              {(() => {
+                const etiqueta = pagoSplit ? 'Split Payment' : metodo.label
+                return esExcepcion ? `Excepción (${etiqueta})` : etiqueta
+              })()}
             </p>
+            {pagoSplit && (
+              <p className="text-surface-400 text-xs font-mono mt-0.5 tabular-nums">
+                {METODOS_SPLIT.map((m) => `${ETIQUETA_METODO[m]} ${fmtPct(pagoSplit[m].porcentaje)}`).join(' · ')}
+              </p>
+            )}
             <p className={`text-xs font-mono mt-0.5 ${factorReal < 1 ? 'text-emerald-400' : factorReal > 1 ? 'text-red-400' : 'text-surface-500'}`}>
               {ajusteLabel}
             </p>
@@ -633,7 +687,9 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-surface-700 rounded-xl p-3">
               <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Método</p>
-              <Badge color={BADGE[metodo.badge]}>{metodo.label}</Badge>
+              {pagoSplit
+                ? <Badge color="violet">Split Payment</Badge>
+                : <Badge color={BADGE[metodo.badge]}>{metodo.label}</Badge>}
             </div>
             <div className="bg-surface-700 rounded-xl p-3">
               <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Emitido</p>
@@ -652,6 +708,20 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
               <p className="text-brand-400 font-mono font-bold">{fmt(pres.monto)}</p>
             </div>
           </div>
+
+          {pagoSplit && (
+            <dl aria-label="Detalle del Split Payment" className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+              {METODOS_SPLIT.map((m) => (
+                <div key={m} className="bg-surface-700 rounded-xl p-3">
+                  <dt className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">{ETIQUETA_METODO[m]}</dt>
+                  <dd className="flex items-baseline justify-between gap-3">
+                    <span className="text-brand-400 font-mono font-bold tabular-nums">{fmt(pagoSplit[m].monto)}</span>
+                    <span className="text-surface-300 font-mono text-sm tabular-nums">{fmtPct(pagoSplit[m].porcentaje)}</span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
         </Card>
       )}
 
@@ -665,6 +735,9 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
       ].map(m => (
         <Modal key={m.key} open={modal===m.key} busy={cambiandoEstado}
           onClose={()=>{ if (cambiandoEstado) return; setModal(null); setErrorModal('') }} title={m.title} width="max-w-sm">
+          {/* Contenido desplazable: en pantallas bajas con el split activo los
+              botones (fuera de esta zona) siguen siempre accesibles. */}
+          <div className="max-h-[calc(100dvh-13rem)] overflow-y-auto overscroll-contain -mx-1 px-1">
           <p className="text-surface-300 text-sm font-body mb-4">{m.body}</p>
 
           {/* CORRECCIÓN (desacople Día X / Día Y): captura explícita de la
@@ -690,10 +763,15 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
                            text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
               />
               <p className="text-surface-500 text-xs font-body mt-1.5">
-                Emitido el {fmtFecha(pres.fecha)}. Esta es la fecha que se usa para facturación y estadísticas de cobranza — no tiene por qué coincidir.
+                Emitido el {fmtFecha(pres.fecha)}. La fecha que se usa para facturación y estadísticas es la del día de cobro — no necesariamente tiene que coincidir con la de emisión.
               </p>
             </div>
           )}
+
+          {m.key === 'pagar' && puedeSplit && (
+            <PagoSplitCampos split={split} total={pres.monto} disabled={cambiandoEstado} />
+          )}
+          </div>
 
           {errorModal && (
             <div role="alert" className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2 mb-4">
@@ -704,7 +782,8 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
             <Button variant="secondary" className="flex-1" disabled={cambiandoEstado}
               onClick={()=>{setModal(null);setErrorModal('')}}>Cancelar</Button>
             <Button variant={m.danger?'danger':'primary'} className="flex-1" icon={m.icon} onClick={m.action}
-              disabled={cambiandoEstado} loading={cambiandoEstado} loadingText="Aplicando el cambio, aguardá un momento">
+              disabled={cambiandoEstado || (m.key === 'pagar' && puedeSplit && !split.confirmable)}
+              loading={cambiandoEstado} loadingText="Aplicando el cambio, aguardá un momento">
               {m.label}
             </Button>
           </div>
@@ -830,7 +909,21 @@ export default function Historial() {
         limite:      PAGE_SIZE,
         offset:      (page - 1) * PAGE_SIZE,
       })
-      setPresupuestos(data)
+      // Split Payment: sólo los pagados de contado pueden tener split. Dato
+      // informativo (etiqueta de la columna Método): si la lectura falla, el
+      // listado se muestra igual con el método único.
+      const idsContado = data
+        .filter(p => p.estado === 'pagado' && esMetodoElegibleSplit(p.metodoPago))
+        .map(p => p.idPresupuesto)
+      let splits = new Map()
+      if (idsContado.length) {
+        try {
+          splits = await obtenerSplitsPorPresupuestos(idsContado)
+        } catch (e) {
+          console.error('[Historial] splits:', e)
+        }
+      }
+      setPresupuestos(data.map(p => ({ ...p, split: splits.get(p.idPresupuesto) ?? null })))
       setTotalCount(count)
     } catch (err) {
       console.error('[Historial] Error cargando:', err)
@@ -935,13 +1028,13 @@ export default function Historial() {
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Buscar por ID o cliente..."
               aria-label="Buscar por ID o cliente"
-              className="w-full bg-surface-700 border border-surface-600 rounded-xl pl-9 pr-4 py-2.5 lg:py-2 text-white
-                         text-base lg:text-sm font-body placeholder-surface-500 focus:outline-none focus:border-brand-500
-                         transition-all min-h-[44px] lg:min-h-0" />
+              className={`w-full ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl pl-9 pr-4 text-white
+                         text-base sm:text-sm font-body placeholder-surface-500 focus:outline-none focus:border-brand-500
+                         transition-all`} />
           </div>
 
           {(() => {
-            const metodosFiltrados = Object.entries(METODOS_PAGO).filter(([v]) => {
+            const metodosFiltrados = Object.entries(METODOS_FILTRO).filter(([v]) => {
               const esCC = v === 'cc15' || v === 'cc30'
               if (filterEstado === 'pagado'   && esCC)  return false
               if (filterEstado === 'aprobado' && !esCC) return false
@@ -952,14 +1045,14 @@ export default function Historial() {
                 const nuevoMetodo = e.target.value
                 setFilterMetodo(nuevoMetodo)
                 const nuevoEsCC          = nuevoMetodo === 'cc15' || nuevoMetodo === 'cc30'
-                const nuevoEsEfectTransf = nuevoMetodo === 'efectivo' || nuevoMetodo === 'transferencia'
+                const nuevoEsEfectTransf = esFiltroContado(nuevoMetodo)
                 if (nuevoEsCC          && filterEstado === 'pagado')   setFilterEstado('all')
                 if (nuevoEsEfectTransf && filterEstado === 'aprobado') setFilterEstado('all')
               }}
                 aria-label="Filtrar por método de pago"
-                className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                           text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                           cursor-pointer min-h-[44px] lg:min-h-0">
+                className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
+                           text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
+                           cursor-pointer`}>
                 <option value="all">Todos los métodos</option>
                 {metodosFiltrados.map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
               </select>
@@ -968,7 +1061,7 @@ export default function Historial() {
 
           {(() => {
             const esCC          = filterMetodo === 'cc15' || filterMetodo === 'cc30'
-            const esEfectTransf = filterMetodo === 'efectivo' || filterMetodo === 'transferencia'
+            const esEfectTransf = esFiltroContado(filterMetodo)
             const estadosFiltrados = Object.entries(ESTADOS).filter(([v]) => {
               if (v === 'pagado'   && esCC)          return false
               if (v === 'aprobado' && esEfectTransf) return false
@@ -979,41 +1072,29 @@ export default function Historial() {
                 const nuevoEstado = e.target.value
                 setFilterEstado(nuevoEstado)
                 const metodoEsCC          = filterMetodo === 'cc15' || filterMetodo === 'cc30'
-                const metodoEsEfectTransf = filterMetodo === 'efectivo' || filterMetodo === 'transferencia'
+                const metodoEsEfectTransf = esFiltroContado(filterMetodo)
                 if (nuevoEstado === 'pagado'   && metodoEsCC)          setFilterMetodo('all')
                 if (nuevoEstado === 'aprobado' && metodoEsEfectTransf) setFilterMetodo('all')
               }}
                 aria-label="Filtrar por estado"
-                className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                           text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                           cursor-pointer min-h-[44px] lg:min-h-0">
+                className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
+                           text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
+                           cursor-pointer`}>
                 <option value="all">Todos los estados</option>
                 {estadosFiltrados.map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
               </select>
             )
           })()}
 
-          <label className="flex items-center gap-2.5 cursor-pointer select-none bg-surface-700 border border-surface-600
-                             rounded-xl px-3 py-2.5 lg:py-2 min-h-[44px] lg:min-h-0 transition-all hover:border-surface-500">
+          <label className={`flex items-center gap-2.5 cursor-pointer select-none bg-surface-700 border border-surface-600
+                             rounded-xl px-3 ${ALTO_CONTROL} transition-all hover:border-surface-500`}>
             <input type="checkbox" checked={soloExcepcion} onChange={e => setSoloExcepcion(e.target.checked)}
               className="w-4 h-4 lg:w-3.5 lg:h-3.5 rounded accent-brand-500 cursor-pointer shrink-0" />
             <span className="text-surface-300 text-sm font-body">Solo excepciones</span>
           </label>
 
-          <div className="flex flex-col gap-1">
-            <label htmlFor="historial-fecha-desde" className="text-surface-400 text-xs uppercase tracking-widest font-body">Desde</label>
-            <input id="historial-fecha-desde" type="date" value={filterFechaD} onChange={e => setFilterFechaD(e.target.value)}
-              className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                         text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                         [color-scheme:dark] min-h-[44px] lg:min-h-0" />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="historial-fecha-hasta" className="text-surface-400 text-xs uppercase tracking-widest font-body">Hasta</label>
-            <input id="historial-fecha-hasta" type="date" value={filterFechaH} onChange={e => setFilterFechaH(e.target.value)}
-              className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                         text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                         [color-scheme:dark] min-h-[44px] lg:min-h-0" />
-          </div>
+          <DateField id="historial-fecha-desde" label="Desde" value={filterFechaD} onChange={setFilterFechaD} />
+          <DateField id="historial-fecha-hasta" label="Hasta" value={filterFechaH} onChange={setFilterFechaH} />
 
           {hasAnyFilter && (
             <button
@@ -1021,10 +1102,10 @@ export default function Historial() {
                 setSearch(''); setFilterMetodo('all'); setFilterEstado('all')
                 setSoloExcepcion(false); setFilterFechaD(''); setFilterFechaH('')
               }}
-              className="flex items-center justify-center gap-2 bg-surface-700 border border-surface-600 rounded-xl
-                         px-3 py-2.5 lg:py-2 min-h-[44px] lg:min-h-0 w-full sm:col-span-2 lg:col-span-1 lg:w-auto
+              className={`flex items-center justify-center gap-2 bg-surface-700 border border-surface-600 rounded-xl
+                         px-3 ${ALTO_CONTROL} w-full sm:col-span-2 lg:col-span-1 lg:w-auto
                          text-surface-300 text-sm font-body hover:border-red-500/50 hover:text-red-400
-                         hover:bg-red-500/10 transition-all cursor-pointer whitespace-nowrap">
+                         hover:bg-red-500/10 transition-all cursor-pointer whitespace-nowrap`}>
               <X size={13} />Limpiar filtros
             </button>
           )}
@@ -1077,7 +1158,9 @@ export default function Historial() {
                         </td>
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-1">
-                            <Badge color={BADGE[m.badge]}>{m.label}</Badge>
+                            {p.split
+                              ? <Badge color="violet">Split Payment</Badge>
+                              : <Badge color={BADGE[m.badge]}>{m.label}</Badge>}
                             {p.esExcepcion === 1 && <Badge color="violet">Exc.</Badge>}
                           </div>
                         </td>
@@ -1159,7 +1242,9 @@ export default function Historial() {
 
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Badge color={BADGE[e.color]}>{e.label}</Badge>
-                        <Badge color={BADGE[m.badge]}>{m.label}</Badge>
+                        {p.split
+                              ? <Badge color="violet">Split Payment</Badge>
+                              : <Badge color={BADGE[m.badge]}>{m.label}</Badge>}
                         {p.esExcepcion === 1 && <Badge color="violet">Exc.</Badge>}
                       </div>
 

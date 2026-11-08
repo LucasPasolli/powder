@@ -17,6 +17,8 @@ import { useEffect, useState } from 'react'
 import { CalendarRange, SlidersHorizontal } from 'lucide-react'
 import { Button, Card } from '../ui'
 import FullScreenSheet from '../ui/FullScreenSheet'
+import DateField from '../ui/DateField'
+import { ALTO_CONTROL } from '../ui/controles'
 import { useBreakpoint } from '../../hooks/useBreakpoint'
 import {
   RANGOS, IDX_PERSONALIZADO, filtrosIniciales, errorDeFiltros,
@@ -25,9 +27,6 @@ import { fmtFecha, hoyISO } from './formatters'
 
 const TOQUE = 'justify-center min-h-[44px] min-[1025px]:min-h-0'
 
-const INPUT_FECHA =
-  'w-full min-h-[44px] min-[1025px]:min-h-0 bg-surface-700 border border-surface-600 rounded-xl px-3 py-2 ' +
-  'text-white text-base min-[1025px]:text-sm font-body focus:outline-none focus:border-brand-500 [color-scheme:dark]'
 
 /**
  * @param {object} props
@@ -75,7 +74,7 @@ export default function PanelFiltros({ filtros, desde, hasta, onAplicar, onLimpi
       {RANGOS.map((r, i) => (
         <button key={r.id} type="button" aria-pressed={borrador.rangoIdx === i}
           onClick={() => editar(conRango(i))}
-          className={`px-4 py-2 rounded-xl text-sm font-body transition-all border ${TOQUE}
+          className={`px-4 ${ALTO_CONTROL} rounded-xl text-sm font-body transition-all border justify-center
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
             ${borrador.rangoIdx === i
               ? 'bg-brand-500/15 border-brand-500/40 text-white'
@@ -88,19 +87,13 @@ export default function PanelFiltros({ filtros, desde, hasta, onAplicar, onLimpi
 
   const fechas = borrador.rangoIdx === IDX_PERSONALIZADO && (
     <div className={isCompact ? 'mt-4 grid grid-cols-1 gap-3' : 'flex items-center gap-2 ml-2'}>
-      <div>
-        <label htmlFor="est-desde" className={isCompact ? 'block text-surface-400 text-xs font-body mb-1' : 'sr-only'}>Desde</label>
-        <input id="est-desde" type="date" value={borrador.desdeCustom} max={borrador.hastaCustom || hoy}
-          onChange={(e) => editar({ ...borrador, desdeCustom: e.target.value })}
-          aria-invalid={!!error} className={INPUT_FECHA} />
-      </div>
+      <DateField id="est-desde" label="Desde" clearable={false} value={borrador.desdeCustom}
+        max={borrador.hastaCustom || hoy} aria-invalid={!!error}
+        onChange={(v) => editar({ ...borrador, desdeCustom: v })} />
       {!isCompact && <span className="text-surface-500 text-sm" aria-hidden="true">→</span>}
-      <div>
-        <label htmlFor="est-hasta" className={isCompact ? 'block text-surface-400 text-xs font-body mb-1' : 'sr-only'}>Hasta</label>
-        <input id="est-hasta" type="date" value={borrador.hastaCustom} min={borrador.desdeCustom || undefined}
-          onChange={(e) => editar({ ...borrador, hastaCustom: e.target.value })}
-          aria-invalid={!!error} className={INPUT_FECHA} />
-      </div>
+      <DateField id="est-hasta" label="Hasta" clearable={false} value={borrador.hastaCustom}
+        min={borrador.desdeCustom || undefined} aria-invalid={!!error}
+        onChange={(v) => editar({ ...borrador, hastaCustom: v })} />
     </div>
   )
 

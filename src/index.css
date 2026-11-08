@@ -57,3 +57,22 @@
   from { opacity: 0; transform: translateY(24px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Animación de error del login (movida desde un <style> inline para poder
+   usar una CSP sin 'unsafe-inline' en scripts y mantener estilos en un solo lugar). */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-8px); }
+  40%      { transform: translateX(8px); }
+  60%      { transform: translateX(-6px); }
+  80%      { transform: translateX(6px); }
+}
+
+@layer utilities {
+  .animate-shake { animation: shake 0.5s ease; }
+}
+
+/* Accesibilidad (WCAG 2.3.3): respetar "reducir movimiento". */
+@media (prefers-reduced-motion: reduce) {
+  .animate-shake, .animate-slide-up, .animate-fade-in { animation: none !important; opacity: 1; }
+}

@@ -563,4 +563,26 @@ export async function obtenerMaxPrecioProveedorEnPedidos(idProducto) {
 
   if (error) manejarError('obtenerMaxPrecioProveedorEnPedidos', error)
   return data[0]?.precio_unitario ?? 0
-}
+}
+
+/**
+ * Devuelve el atributo VIGENTE `tiene_medidas` de varios productos en UNA sola
+ * query (sin N+1). Lo usa el formulario de Pedidos de Compra antes de guardar
+ * para no decidir con un dato desactualizado (Escenario 2: fuente única).
+ *
+ * @param {Array<number|string>} ids
+ * @returns {Promise<Map<number, boolean>>} idProducto → tiene_medidas. Los ids
+ *          inexistentes no aparecen en el Map.
+ */
+export async function obtenerTieneMedidasPorProductos(ids) {
+  const unicos = [...new Set((ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+  if (unicos.length === 0) return new Map()
+
+  const { data, error } = await supabase
+    .from('producto')
+    .select('id_producto, tiene_medidas')
+    .in('id_producto', unicos)
+
+  if (error) manejarError('obtenerTieneMedidasPorProductos', error)
+  return new Map(data.map((r) => [r.id_producto, Boolean(r.tiene_medidas)]))
+}

@@ -7,7 +7,7 @@ import { ajustarDetallesAlMonto } from './calculoPresupuesto'
 
 /**
  * @typedef {'efectivo'|'transferencia'|'cc15'|'cc30'} MetodoPago
- * @typedef {MetodoPago|'pago_parcial'} EstadoComprobante
+ * @typedef {MetodoPago|'split'|'pago_parcial'} EstadoComprobante
  *
  * @typedef {object} ItemFactura
  * @property {number|string} idProducto
@@ -26,6 +26,10 @@ import { ajustarDetallesAlMonto } from './calculoPresupuesto'
  * @property {string} [fecha]                 Pagos parciales (YYYY-MM-DD).
  * @property {string} [fechaFacturacion]      Ventas (YYYY-MM-DD).
  * @property {ItemFactura[]} [items]
+ * @property {{metodo: 'efectivo'|'transferencia', porcentaje: number, montoTotal: number}} [split]
+ *   Presente sólo en filas provenientes de un Split Payment: `monto` es la
+ *   porción de ESTE método. Se lista como una línea simple (igual que un pago
+ *   parcial): importe + etiqueta, sin ítems ni desglose.
  *
  * @typedef {object} GrupoCliente
  * @property {number|string} idCliente
@@ -50,6 +54,7 @@ export const FACTOR_IVA = 1.21
 export const ESTADO_LABEL = Object.freeze({
   efectivo:      'Efectivo',
   transferencia: 'Transferencia',
+  split:         'Split Payment',
   cc15:          'CC 15d',
   cc30:          'CC 30d',
   pago_parcial:  'Pago parcial',
@@ -58,6 +63,7 @@ export const ESTADO_LABEL = Object.freeze({
 export const ESTADO_COLOR = Object.freeze({
   efectivo:      'green',
   transferencia: 'blue',
+  split:         'violet',
   cc15:          'yellow',
   cc30:          'yellow',
   pago_parcial:  'yellow',
@@ -107,16 +113,27 @@ export function validarPeriodo(desde, hasta) {
 
 // ─── Modelo ────────────────────────────────────────────────────────────────
 
-/** Lo que muestra el badge: un pago parcial es un estado propio. */
+/** Lo que muestra el badge: un pago parcial y un Split Payment son estados propios. */
 export const estadoDe = (/** @type {Comprobante} */ c) =>
-  c.tipo === 'pago_parcial' ? 'pago_parcial' : c.metodoPago
+  c.tipo === 'pago_parcial' ? 'pago_parcial' : c.split ? 'split' : c.metodoPago
 
 export const fechaDe = (/** @type {Comprobante} */ c) =>
   c.tipo === 'pago_parcial' ? c.fecha : c.fechaFacturacion
 
-/** Key estable y única (un presupuesto puede tener varios pagos parciales). */
+/** Key estable y única (un presupuesto puede tener varios pagos parciales o
+ *  aparecer una vez por método si se cobró con Split Payment). */
 export const claveComprobante = (/** @type {Comprobante} */ c) =>
-  c.tipo === 'pago_parcial' ? `pp-${c.idAplicacion}` : `v-${c.idPresupuesto}`
+  c.tipo === 'pago_parcial'
+    ? `pp-${c.idAplicacion}`
+    : c.split ? `v-${c.idPresupuesto}-${c.split.metodo}` : `v-${c.idPresupuesto}`
+
+/** ¿La fila proviene de un presupuesto cobrado con Split Payment? */
+export const esSplit = (/** @type {Comprobante} */ c) => Boolean(c?.split)
+
+/** Línea simple: importe cobrado + etiqueta, sin ítems ni desglose de IVA
+ *  (pago parcial y Split Payment). */
+export const esLineaSimple = (/** @type {Comprobante} */ c) =>
+  c?.tipo === 'pago_parcial' || Boolean(c?.split)
 
 /**
  * Agrupa los presupuestos por cliente calculando los ajustes de IVA.
@@ -140,8 +157,9 @@ export function agruparPresupuestos(presupuestos, metodos) {
       }
     }
 
-    // Pago parcial: cobro puntual, sin ítems propios.
-    if (p.tipo === 'pago_parcial') {
+    // Pago parcial / Split Payment: cobro puntual por un importe, sin ítems
+    // propios (figuran en el presupuesto original).
+    if (esLineaSimple(p)) {
       porCliente[key].presupuestos.push(p)
       porCliente[key].totalCliente += p.monto
       continue
@@ -245,14 +263,14 @@ export function totalesGrupos(grupos) {
 }
 
 /**
- * Desglose impositivo de un comprobante. En un pago parcial no hay ítems ni
- * desglose: `neto` e `iva` son `null` y la UI sólo muestra el total.
+ * Desglose impositivo de un comprobante. En un pago parcial o un Split Payment
+ * no hay ítems ni desglose: `neto` e `iva` son `null` y la UI sólo muestra el total.
  * @param {Comprobante} c
  * @returns {{neto: number|null, iva: number|null, total: number}}
  */
 export function totalesComprobante(c) {
   const total = c.monto ?? 0
-  if (c.tipo === 'pago_parcial') return { neto: null, iva: null, total }
+  if (esLineaSimple(c)) return { neto: null, iva: null, total }
   const neto = c.items?.length
     ? c.items.reduce((acc, it) => acc + (it.subtotalNeto ?? 0), 0)
     : total / FACTOR_IVA
