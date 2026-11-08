@@ -14,6 +14,7 @@ import { useEffect, useId, useState } from 'react'
 import { AlertCircle, Calendar, Eye, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { Badge, Button, Card, Input, Select } from '../ui'
 import FullScreenSheet from '../ui/FullScreenSheet'
+import DateField from '../ui/DateField'
 import useBreakpoint from '../../hooks/useBreakpoint'
 import {
   ESTADO_OPCIONES, FILTROS_VACIOS, contarFiltros, describirFiltros, firstOfMonth, fmtFecha, today,
@@ -35,8 +36,8 @@ function Alerta({ children, className = '' }) {
  * @param {'fila'|'hoja'|'movil'} variante
  *   fila  → desktop: orden Cliente, Desde, Hasta, Estado en una fila flexible.
  *   hoja  → panel táctil de tablet: orden original, cliente y estado a ancho completo.
- *   movil → inline en mobile: Cliente primero (ancho completo), Desde/Hasta en
- *           dos columnas, Estado a ancho completo.
+ *   movil → inline en mobile: Cliente, Desde, Hasta y Estado a ancho completo
+ *           (mismo margen y ancho que el buscador; DateField no entra en media columna a 320 px).
  */
 function Campos({ b, set, variante = 'fila' }) {
   const tactil = variante !== 'fila'
@@ -49,13 +50,12 @@ function Campos({ b, set, variante = 'fila' }) {
       maxLength={60} placeholder="Nombre, apellido o CUIT" value={b.cliente}
       onChange={(e) => set({ cliente: e.target.value })} className={base} />
   )
+  // El período es obligatorio: sin botón "Borrar" (clearable=false) para no dejar un rango vacío.
   const desde = (
-    <Input label="Desde" type="date" value={b.desde} onChange={(e) => set({ desde: e.target.value })}
-      className={`[color-scheme:dark] ${base}`} required />
+    <DateField label="Desde" value={b.desde} onChange={(v) => set({ desde: v })} clearable={false} required />
   )
   const hasta = (
-    <Input label="Hasta" type="date" value={b.hasta} onChange={(e) => set({ hasta: e.target.value })}
-      className={`[color-scheme:dark] ${base}`} required />
+    <DateField label="Hasta" value={b.hasta} onChange={(v) => set({ hasta: v })} clearable={false} required />
   )
   const estado = (
     <Select label="Estado" value={b.estado} onChange={(e) => set({ estado: e.target.value })} className={base}>
@@ -69,8 +69,8 @@ function Campos({ b, set, variante = 'fila' }) {
     return (
       <>
         <div className="col-span-2 min-w-0 [&_label]:whitespace-nowrap">{cliente}</div>
-        <div className="min-w-0">{desde}</div>
-        <div className="min-w-0">{hasta}</div>
+        <div className="col-span-2 min-w-0">{desde}</div>
+        <div className="col-span-2 min-w-0">{hasta}</div>
         <div className="col-span-2 min-w-0">{estado}</div>
       </>
     )
@@ -82,8 +82,8 @@ function Campos({ b, set, variante = 'fila' }) {
     return (
       <>
         <div className="flex-1 min-w-[14rem] [&_label]:whitespace-nowrap">{cliente}</div>
-        <div className="w-[9.5rem] shrink-0">{desde}</div>
-        <div className="w-[9.5rem] shrink-0">{hasta}</div>
+        <div className="w-[12rem] shrink-0">{desde}</div>
+        <div className="w-[12rem] shrink-0">{hasta}</div>
         <div className="w-[11rem] shrink-0">{estado}</div>
       </>
     )

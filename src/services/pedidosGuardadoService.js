@@ -59,6 +59,7 @@ const MENSAJES = {
   item_invalido:                    () => 'Hay un ítem con cantidad o precio inválido. Revisá la tabla de productos.',
   producto_inexistente:             (id) => `El producto ID ${id} no existe en el inventario.`,
   medida_requerida:                 (id) => `Seleccioná una medida para el producto ID ${id}.`,
+  medida_invalida:                  (id) => `La medida del producto ID ${id} no es válida. Elegí una de la lista.`,
   metodo_pago_invalido:             () => 'El método de pago seleccionado no es válido.',
   proveedor_requerido:              () => 'Seleccioná un proveedor antes de guardar el pedido.',
   proveedor_inexistente:            () => 'El proveedor seleccionado ya no existe. Elegí otro.',
@@ -211,15 +212,19 @@ const SELECT_PEDIDO_PARA_EDICION = `
   proveedor ( id_proveedor, nombre_fiscal, nombre_comercial ),
   detalle_pedido_compra (
     *,
-    producto ( id_producto, tiene_medidas, producto_medida ( medida ) )
+    producto ( id_producto, tiene_medidas )
   ),
   pedido_compra_cuota ( * )
 `
 
 /**
  * Carga TODO lo que necesita el formulario de edición en UNA sola consulta
- * con relaciones (join): pedido + proveedor + ítems (con las medidas
- * disponibles de cada producto) + plan de cuotas.
+ * con relaciones (join): pedido + proveedor + ítems (con el atributo vigente
+ * `tiene_medidas` de cada producto) + plan de cuotas.
+ *
+ * Las opciones de medida ya NO se traen de producto_medida: salen del catálogo
+ * (lib/medidasProducto) y la decisión de habilitar el cuadrante sale sólo del
+ * atributo del producto.
  *
  * Antes: 1 (detalles) + 1 (proveedor) + 1 (cuotas) + 2 por ítem (medidas).
  * Ahora: 1.
@@ -240,11 +245,9 @@ export async function obtenerPedidoParaEdicion(idPedido) {
   const detalles = [...(data.detalle_pedido_compra ?? [])]
     .sort((a, b) => a.id_detalle_pedido - b.id_detalle_pedido)
     .map((row) => {
-      const medidas = (row.producto?.producto_medida ?? []).map((m) => m.medida).sort()
       return {
         ...mapDetallePedido(row),
-        tieneMedidas:       Boolean(row.producto?.tiene_medidas),
-        medidasDisponibles: row.producto?.tiene_medidas ? medidas : [],
+        tieneMedidas: Boolean(row.producto?.tiene_medidas),
       }
     })
 

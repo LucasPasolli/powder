@@ -2,6 +2,7 @@
 // Piezas compartidas por las pantallas de gestión (ex ABMC). Extraídas SIN cambios de lógica.
 import { useState, useEffect } from 'react'
 import { Button, Modal } from '../../../components/ui'
+import { ALTO_CONTROL } from '../../../components/ui/controles'
 import { AlertTriangle, Info } from 'lucide-react'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -149,4 +150,10 @@ export function InfoBanner({ message, onClose }) {
 
 // ─── Shared dropdown style ────────────────────────────────────────────────────
 
-export const dropdownClass = "w-full bg-surface-700 border border-surface-600 rounded-xl pl-3 pr-6 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500"
+// Misma altura (ALTO_CONTROL), tipografía (16 px mobile / 14 px desde sm), borde, radio
+// y colores que el buscador y DateField: los tres filtros se ven como una familia.
+export const dropdownClass = `w-full ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl pl-3 pr-6 text-base sm:text-sm text-white focus:outline-none focus:border-brand-500`
+
+// Buscador de las pantallas de gestión: misma altura (≥ 44 px en layout táctil), tipografía,
+// borde y radio que dropdownClass y DateField. Fuente única para las 6 pantallas.
+export const buscadorClass = `w-full ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3 text-base sm:text-sm text-white placeholder-surface-500 focus:outline-none focus:border-brand-500`

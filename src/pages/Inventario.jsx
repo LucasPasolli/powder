@@ -17,6 +17,7 @@ import {
   construirFilasListaPrecios, generarListaPreciosXlsx, descargarArchivo, fechaLocalISO,
 } from '../lib/listaPreciosExport'
 import { supabase } from '../lib/supabase'
+import { MEDIDAS_VALIDAS } from '../lib/medidasProducto'
 import { Button, Card, PageHeader, Modal, Input, Select, Badge } from '../components/ui'
 import {
   esBajoStock, estadoStock, etiquetaEstadoStock,
@@ -42,7 +43,7 @@ import { Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, PackagePlus, X, C
 
 // ─── Constantes ───────────────────────────────────────────────────────────
 
-const MEDIDAS_VALIDAS = ['standard', '0.25', '0.50', '0.75', '1.00', '1.25', '1.50', '1.75', '2.00']
+// MEDIDAS_VALIDAS: fuente única en lib/medidasProducto (compartida con Pedidos de Compra).
 
 function normalize(str) {
   return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -483,7 +484,11 @@ function StockModal({ open, onClose, producto, onSaved }) {
   async function guardarConMedidas() {
     setLoading(true)
     try {
-      await supabase.from('producto').update({ tiene_medidas: true }).eq('id_producto', producto.idProducto)
+      // Si el cambio de atributo falla NO se sigue: evita dejar stock por medida
+      // cargado en un producto que sigue figurando "sin medidas". Las filas de
+      // producto_medida las completa además el trigger de base (ver migración SQL).
+      const { error: errAtributo } = await supabase.from('producto').update({ tiene_medidas: true }).eq('id_producto', producto.idProducto)
+      if (errAtributo) throw errAtributo
       for (const medida of medidasStock) {
         const valor = editMedidas[medida.idMedida] !== undefined ? editMedidas[medida.idMedida] : medida.cantidad
         if (valor === '' || valor === null || valor === undefined) continue

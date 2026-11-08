@@ -11,7 +11,9 @@
 
 import { useEffect, useId, useState } from 'react'
 import { Search, SlidersHorizontal } from 'lucide-react'
-import { Button, Card, Input, Select } from '../ui'
+import { Button, Card, Select } from '../ui'
+import DateField from '../ui/DateField'
+import { ALTO_CONTROL } from '../ui/controles'
 import FullScreenSheet from '../ui/FullScreenSheet'
 import { TOUCH } from './pedidosPresentacion'
 
@@ -32,9 +34,9 @@ export function rangoInvalido(desde, hasta) {
 }
 
 const field =
-  'w-full bg-surface-700 border border-surface-600 rounded-xl px-3 py-2 text-white font-body text-sm ' +
+  'w-full bg-surface-700 border border-surface-600 rounded-xl px-3 text-white font-body text-sm ' +
+  `${ALTO_CONTROL} ` +
   'focus:outline-none focus:border-brand-500 transition-all [color-scheme:dark]'
-const labelCls = 'block text-surface-300 text-xs tracking-widest uppercase font-body mb-1'
 
 /**
  * Campos de estado/fecha.
@@ -44,6 +46,7 @@ const labelCls = 'block text-surface-300 text-xs tracking-widest uppercase font-
  */
 function CamposFiltro({ values, onChange, compact, idBase }) {
   const set = (k) => (e) => onChange({ ...values, [k]: e.target.value })
+  const setFecha = (k) => (iso) => onChange({ ...values, [k]: iso })
 
   if (compact) {
     return (
@@ -58,10 +61,10 @@ function CamposFiltro({ values, onChange, compact, idBase }) {
           <option value="pendiente">Pago pendiente</option>
           <option value="pagado">Pagado</option>
         </Select>
-        <Input label="Desde" type="date" value={values.filterDesde} max={values.filterHasta || undefined}
-          onChange={set('filterDesde')} className={`${TOUCH} [color-scheme:dark]`} />
-        <Input label="Hasta" type="date" value={values.filterHasta} min={values.filterDesde || undefined}
-          onChange={set('filterHasta')} className={`${TOUCH} [color-scheme:dark]`} />
+        <DateField label="Desde" value={values.filterDesde} max={values.filterHasta || undefined}
+          onChange={setFecha('filterDesde')} />
+        <DateField label="Hasta" value={values.filterHasta} min={values.filterDesde || undefined}
+          onChange={setFecha('filterHasta')} />
       </>
     )
   }
@@ -84,16 +87,10 @@ function CamposFiltro({ values, onChange, compact, idBase }) {
           <option value="pagado">Pagado</option>
         </select>
       </div>
-      <div>
-        <label htmlFor={`${idBase}-desde`} className={labelCls}>Desde</label>
-        <input id={`${idBase}-desde`} type="date" value={values.filterDesde} max={values.filterHasta || undefined}
-          onChange={set('filterDesde')} className={field} />
-      </div>
-      <div>
-        <label htmlFor={`${idBase}-hasta`} className={labelCls}>Hasta</label>
-        <input id={`${idBase}-hasta`} type="date" value={values.filterHasta} min={values.filterDesde || undefined}
-          onChange={set('filterHasta')} className={field} />
-      </div>
+      <DateField id={`${idBase}-desde`} label="Desde" value={values.filterDesde}
+        max={values.filterHasta || undefined} onChange={setFecha('filterDesde')} />
+      <DateField id={`${idBase}-hasta`} label="Hasta" value={values.filterHasta}
+        min={values.filterDesde || undefined} onChange={setFecha('filterHasta')} />
     </>
   )
 }
@@ -134,9 +131,9 @@ export default function FiltrosPedidos({ value, onChange, compact }) {
       <input
         id={`${idBase}-q`} type="search" value={value.filterProv} onChange={setBusqueda}
         placeholder="Buscar por proveedor o ID..."
-        className={`w-full bg-surface-700 border border-surface-600 rounded-xl pl-9 pr-4 py-2 text-white font-body
+        className={`w-full bg-surface-700 border border-surface-600 rounded-xl pl-9 pr-4 text-white font-body ${ALTO_CONTROL}
                     placeholder-surface-500 focus:outline-none focus:border-brand-500 transition-all
-                    ${compact ? `text-base ${TOUCH}` : 'text-sm'}`}
+                    ${compact ? 'text-base sm:text-sm' : 'text-sm'}`}
       />
     </div>
   )
@@ -150,8 +147,8 @@ export default function FiltrosPedidos({ value, onChange, compact }) {
           <CamposFiltro values={value} onChange={onChange} compact={false} idBase={idBase} />
           {hayAlgo && (
             <button type="button" onClick={limpiarTodo}
-              className="bg-surface-700 border border-surface-600 rounded-xl px-3 py-2 text-surface-400 text-sm font-body
-                         hover:text-white hover:border-surface-500 transition-all whitespace-nowrap">
+              className={`bg-surface-700 border border-surface-600 rounded-xl px-3 ${ALTO_CONTROL} text-surface-400 text-sm font-body
+                         hover:text-white hover:border-surface-500 transition-all whitespace-nowrap`}>
               Limpiar
             </button>
           )}

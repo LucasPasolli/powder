@@ -4,6 +4,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import Presupuestador from './Presupuestador'
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
+import DateField from '../components/ui/DateField'
+import { ALTO_CONTROL } from '../components/ui/controles'
 import {
   Search, ChevronDown, ChevronUp, ArrowLeft, FileText,
   Clock, CheckCircle2, XCircle, ThumbsUp, AlertCircle, Trash2, Download, Pencil, X, Wallet, Tag
@@ -1026,9 +1028,9 @@ export default function Historial() {
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Buscar por ID o cliente..."
               aria-label="Buscar por ID o cliente"
-              className="w-full bg-surface-700 border border-surface-600 rounded-xl pl-9 pr-4 py-2.5 lg:py-2 text-white
-                         text-base lg:text-sm font-body placeholder-surface-500 focus:outline-none focus:border-brand-500
-                         transition-all min-h-[44px] lg:min-h-0" />
+              className={`w-full ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl pl-9 pr-4 text-white
+                         text-base sm:text-sm font-body placeholder-surface-500 focus:outline-none focus:border-brand-500
+                         transition-all`} />
           </div>
 
           {(() => {
@@ -1048,9 +1050,9 @@ export default function Historial() {
                 if (nuevoEsEfectTransf && filterEstado === 'aprobado') setFilterEstado('all')
               }}
                 aria-label="Filtrar por método de pago"
-                className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                           text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                           cursor-pointer min-h-[44px] lg:min-h-0">
+                className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
+                           text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
+                           cursor-pointer`}>
                 <option value="all">Todos los métodos</option>
                 {metodosFiltrados.map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
               </select>
@@ -1075,36 +1077,24 @@ export default function Historial() {
                 if (nuevoEstado === 'aprobado' && metodoEsEfectTransf) setFilterMetodo('all')
               }}
                 aria-label="Filtrar por estado"
-                className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                           text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                           cursor-pointer min-h-[44px] lg:min-h-0">
+                className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
+                           text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
+                           cursor-pointer`}>
                 <option value="all">Todos los estados</option>
                 {estadosFiltrados.map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
               </select>
             )
           })()}
 
-          <label className="flex items-center gap-2.5 cursor-pointer select-none bg-surface-700 border border-surface-600
-                             rounded-xl px-3 py-2.5 lg:py-2 min-h-[44px] lg:min-h-0 transition-all hover:border-surface-500">
+          <label className={`flex items-center gap-2.5 cursor-pointer select-none bg-surface-700 border border-surface-600
+                             rounded-xl px-3 ${ALTO_CONTROL} transition-all hover:border-surface-500`}>
             <input type="checkbox" checked={soloExcepcion} onChange={e => setSoloExcepcion(e.target.checked)}
               className="w-4 h-4 lg:w-3.5 lg:h-3.5 rounded accent-brand-500 cursor-pointer shrink-0" />
             <span className="text-surface-300 text-sm font-body">Solo excepciones</span>
           </label>
 
-          <div className="flex flex-col gap-1">
-            <label htmlFor="historial-fecha-desde" className="text-surface-400 text-xs uppercase tracking-widest font-body">Desde</label>
-            <input id="historial-fecha-desde" type="date" value={filterFechaD} onChange={e => setFilterFechaD(e.target.value)}
-              className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                         text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                         [color-scheme:dark] min-h-[44px] lg:min-h-0" />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="historial-fecha-hasta" className="text-surface-400 text-xs uppercase tracking-widest font-body">Hasta</label>
-            <input id="historial-fecha-hasta" type="date" value={filterFechaH} onChange={e => setFilterFechaH(e.target.value)}
-              className="w-full lg:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 lg:py-2
-                         text-white text-base lg:text-sm font-body focus:outline-none focus:border-brand-500
-                         [color-scheme:dark] min-h-[44px] lg:min-h-0" />
-          </div>
+          <DateField id="historial-fecha-desde" label="Desde" value={filterFechaD} onChange={setFilterFechaD} />
+          <DateField id="historial-fecha-hasta" label="Hasta" value={filterFechaH} onChange={setFilterFechaH} />
 
           {hasAnyFilter && (
             <button
@@ -1112,10 +1102,10 @@ export default function Historial() {
                 setSearch(''); setFilterMetodo('all'); setFilterEstado('all')
                 setSoloExcepcion(false); setFilterFechaD(''); setFilterFechaH('')
               }}
-              className="flex items-center justify-center gap-2 bg-surface-700 border border-surface-600 rounded-xl
-                         px-3 py-2.5 lg:py-2 min-h-[44px] lg:min-h-0 w-full sm:col-span-2 lg:col-span-1 lg:w-auto
+              className={`flex items-center justify-center gap-2 bg-surface-700 border border-surface-600 rounded-xl
+                         px-3 ${ALTO_CONTROL} w-full sm:col-span-2 lg:col-span-1 lg:w-auto
                          text-surface-300 text-sm font-body hover:border-red-500/50 hover:text-red-400
-                         hover:bg-red-500/10 transition-all cursor-pointer whitespace-nowrap">
+                         hover:bg-red-500/10 transition-all cursor-pointer whitespace-nowrap`}>
               <X size={13} />Limpiar filtros
             </button>
           )}

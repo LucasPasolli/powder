@@ -2,10 +2,11 @@
 // Migrado desde ABMC.jsx sin cambios funcionales (Task 2).
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Button, Input, Select, Modal, Table, Tr, Td, Badge, Card } from '../../../components/ui'
+import DateField from '../../../components/ui/DateField'
 import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { obtenerIngresos, crearIngreso, actualizarIngreso, eliminarIngreso } from '../../../services/movimientosService'
-import { PAGE_SIZE, fmt, formatearFecha, cap, normalizarTexto, Pagination, ConfirmModal, dropdownClass } from './comunes'
+import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, cap, normalizarTexto, Pagination, ConfirmModal, dropdownClass } from './comunes'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INGRESOS
@@ -93,17 +94,11 @@ export default function Ingresos() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Buscar por ID o descripción…"
-            className="w-full bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 text-base sm:text-sm text-white placeholder-surface-500 focus:outline-none focus:border-brand-500"
+            className={buscadorClass}
           />
         </div>
-        <div>
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-            className="w-full sm:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 text-base sm:text-sm text-white focus:outline-none focus:border-brand-500 [color-scheme:dark]" />
-        </div>
-        <div>
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-            className="w-full sm:w-auto bg-surface-700 border border-surface-600 rounded-xl px-3 py-2.5 text-base sm:text-sm text-white focus:outline-none focus:border-brand-500 [color-scheme:dark]" />
-        </div>
+        <DateField label="Desde" value={dateFrom} onChange={setDateFrom} />
+        <DateField label="Hasta" value={dateTo} onChange={setDateTo} />
         <div>
           <select value={filtCat} onChange={e => setFiltCat(e.target.value)} className={dropdownClass + ' sm:w-auto'}>
             <option value="">Todas las categorías</option>
