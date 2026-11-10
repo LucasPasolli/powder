@@ -12,6 +12,8 @@ import {
 } from '../services/promocionesService'
 import { obtenerProductos, obtenerCategorias } from '../services/productosService'
 import { Button, Card, PageHeader, Modal, Input } from '../components/ui'
+import FiltrosMovil from '../components/ui/FiltrosMovil'
+import { useBreakpoint } from '../hooks/useBreakpoint'
 import { Plus, Tag, Edit2, Power, PowerOff, AlertCircle, CheckCircle2, X, Search } from 'lucide-react'
 import { createPortal } from 'react-dom'
 
@@ -460,6 +462,7 @@ export default function Promociones() {
   const [editando,  setEditando]  = useState(null)
   const [toast,     setToast]     = useState('')
   const [filtro,    setFiltro]    = useState('todas') // 'todas' | 'activas' | 'inactivas'
+  const { isCompact } = useBreakpoint()
 
   // ── Carga de datos ──────────────────────────────────────────────────────
   // obtenerPromociones ordena por fecha_inicio DESC por defecto.
@@ -510,6 +513,12 @@ export default function Promociones() {
     return true
   })
 
+  const OPCIONES_FILTRO = [
+    { value: 'todas',     label: 'Todas'     },
+    { value: 'activas',   label: 'Activas'   },
+    { value: 'inactivas', label: 'Inactivas' },
+  ]
+
   // ── Resumen rápido ──────────────────────────────────────────────────────
   const hoy = today()
   const totalActivas  = promos.filter(p => p.activo === true  && p.fechaInicio <= hoy && p.fechaFin >= hoy).length
@@ -539,24 +548,37 @@ export default function Promociones() {
         ))}
       </div>
 
-      {/* Filtros */}
+      {/* Filtros
+          Mobile/tablet (≤ 1024px): patrón único del sistema (botón «Filtros» + panel con borrador).
+          Esta pantalla no tiene buscador: la fila muestra la cantidad de resultados.
+          Desktop: chips en línea, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosMovil
+          izquierda={(
+            <p role="status" aria-live="polite" className="text-surface-300 text-sm font-body">
+              {promosFiltradas.length} promoción{promosFiltradas.length !== 1 ? 'es' : ''}
+            </p>
+          )}
+          value={{ filtro }}
+          defaults={{ filtro: 'todas' }}
+          campos={[{ tipo: 'chips', clave: 'filtro', etiqueta: 'Estado', opciones: OPCIONES_FILTRO }]}
+          onApply={(b) => setFiltro(b.filtro)}
+        />
+      ) : (
       <div className="flex gap-2">
-        {[
-          { key: 'todas',     label: 'Todas'     },
-          { key: 'activas',   label: 'Activas'   },
-          { key: 'inactivas', label: 'Inactivas' },
-        ].map(f => (
+        {OPCIONES_FILTRO.map(f => (
           <button
-            key={f.key}
-            onClick={() => setFiltro(f.key)}
+            key={f.value}
+            onClick={() => setFiltro(f.value)}
             className={`px-4 py-1.5 rounded-xl text-sm font-body transition-all border
-              ${filtro === f.key
+              ${filtro === f.value
                 ? 'bg-brand-500/15 border-brand-500/50 text-white'
                 : 'bg-surface-700 border-surface-600 text-surface-400 hover:border-surface-500'}`}>
             {f.label}
           </button>
         ))}
       </div>
+      )}
 
       {/* Tabla de promociones */}
       <Card className="overflow-hidden">

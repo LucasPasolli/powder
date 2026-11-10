@@ -21,10 +21,14 @@ import {
   obtenerAplicacionesDeSaldo,
 } from '../services/pagosService'
 import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
+import FiltrosMovil, { BuscadorListado } from '../components/ui/FiltrosMovil'
+import KpiCard from '../components/ui/KpiCard'
+import PaginadorListado from '../components/ui/PaginadorListado'
+import { useBreakpoint } from '../hooks/useBreakpoint'
 import {
   ArrowLeft, Wallet, Clock, CheckCircle2, AlertTriangle,
   CalendarClock, User, FileText, BadgeCheck, Search, ChevronDown, ChevronUp,
-  Coins, Loader2, X, History, Eye, SlidersHorizontal, WifiOff,
+  Coins, Loader2, X, History, Eye, WifiOff,
 } from 'lucide-react'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -754,27 +758,6 @@ function derivarSaldo(s) {
 
 // ── KPIs ────────────────────────────────────────────────────────────────────
 
-const KPI_SURFACE = {
-  neutral: { box: 'bg-surface-800 border-surface-700', label: 'text-surface-400' },
-  red:     { box: 'bg-red-500/8 border-red-500/25',    label: 'text-red-400'     },
-  blue:    { box: 'bg-blue-500/8 border-blue-500/25',  label: 'text-blue-400'    },
-}
-
-function KpiCard({ label, value, hint, surface = 'neutral', valueClass, icon: Icon }) {
-  const s = KPI_SURFACE[surface]
-  return (
-    <div className={`${s.box} border rounded-xl p-3 sm:p-5 min-w-0`}>
-      <p className={`${s.label} text-xs uppercase tracking-widest font-body flex items-center gap-1`}>
-        {Icon && <Icon size={11} aria-hidden="true" />}{label}
-      </p>
-      <p className={`font-display text-2xl sm:text-3xl tracking-widest mt-1 truncate ${valueClass}`} title={value}>
-        {value}
-      </p>
-      <p className="text-surface-500 text-xs font-body mt-1">{hint}</p>
-    </div>
-  )
-}
-
 // ── Estados transversales ───────────────────────────────────────────────────
 
 function OfflineBanner() {
@@ -826,25 +809,58 @@ function EmptyState({ estado, hayFiltros, onClear }) {
 
 // ── Filtros ─────────────────────────────────────────────────────────────────
 //
-// Mobile (<640px): una sola columna; el panel se puede plegar con «Filtros»
-// (queda abierto por defecto para que nada esté oculto). ≥768px siempre visible.
-// ≥640px: flex-wrap, así los campos se acomodan solos aunque el contenedor sea
-// más angosto que el viewport (p. ej. por un sidebar).
+// Mobile/tablet (≤ 1024px): patrón único del sistema (<FiltrosMovil>): buscador siempre
+// visible + botón «Filtros»; Estado y Orden viven en el panel con borrador (Limpiar / Aplicar).
+// Escritorio (> 1024px): una sola fila con buscador (flexible) + estados + orden, sin cambios.
 
-function SaldosFilters({ filters, onChange, onClear, filtrosActivos, total }) {
-  const [abierto, setAbierto] = useState(true)
+const ORDEN_DEFAULT = FILTROS_INICIALES.sortDias
+
+const CAMPOS_FILTROS_MOVIL = [
+  { tipo: 'chips', clave: 'estado', etiqueta: 'Estado', opciones: ESTADOS },
+  // «Cobrados» no tiene urgencia: el orden sólo aplica al resto (igual que en escritorio).
+  { tipo: 'chips', clave: 'sortDias', etiqueta: 'Orden', visible: (b) => b.estado !== 'pagado',
+    opciones: [{ value: 'asc', label: 'Más urgentes' }, { value: 'desc', label: 'Menos urgentes' }] },
+]
+const DEFAULTS_FILTROS_MOVIL = Object.freeze({ estado: ESTADO_DEFAULT, sortDias: ORDEN_DEFAULT })
+
+function SaldosFilters(props) {
+  const { isCompact } = useBreakpoint()
+  return isCompact ? <SaldosFiltersMovil {...props} /> : <SaldosFiltersEscritorio {...props} />
+}
+
+function SaldosFiltersMovil({ filters, onChange, total }) {
+  const { search, estado, sortDias } = filters
+  return (
+    <FiltrosMovil
+      busqueda={(
+        <BuscadorListado value={search} onChange={(texto) => onChange('search', texto)}
+          placeholder="Buscar por cliente o ID..." etiqueta="Buscar por cliente o ID" />
+      )}
+      value={{ estado, sortDias }}
+      defaults={DEFAULTS_FILTROS_MOVIL}
+      campos={CAMPOS_FILTROS_MOVIL}
+      onApply={(b) => { onChange('estado', b.estado); onChange('sortDias', b.sortDias) }}
+      debajo={(
+        <p role="status" aria-live="polite" className="sr-only">
+          {total} resultado{total !== 1 ? 's' : ''}
+        </p>
+      )}
+    />
+  )
+}
+
+function SaldosFiltersEscritorio({ filters, onChange, onClear, filtrosActivos, total }) {
   const { search, estado, sortDias } = filters
 
-  // En ≥768px todo vive en UNA sola fila: buscador (flexible) + estados + orden.
-  // En mobile se mantiene el layout apilado con el panel plegable.
+  // Todo vive en UNA sola fila: buscador (flexible) + estados + orden.
   const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40'
 
   return (
-    <Card className="p-3 sm:p-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-2.5">
+    <Card className="p-4">
+      <div className="flex flex-row items-center gap-2.5">
 
-        {/* Buscador (+ botón «Filtros» solo en mobile) */}
-        <div className="flex gap-2 min-w-0 md:flex-1">
+        {/* Buscador */}
+        <div className="flex gap-2 min-w-0 flex-1">
           <div className="relative flex-1 min-w-0">
             <Search size={14} aria-hidden="true"
               className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
@@ -855,31 +871,14 @@ function SaldosFilters({ filters, onChange, onClear, filtrosActivos, total }) {
               placeholder="Buscar por cliente o ID..."
               className={`${FIELD_CLASS} md:min-h-[38px] pl-9 pr-3`} />
           </div>
-
-          <button type="button" onClick={() => setAbierto(a => !a)}
-            aria-expanded={abierto} aria-controls="saldos-filtros"
-            className={`md:hidden flex items-center gap-2 min-h-[44px] px-3 rounded-xl border border-surface-600
-                       bg-surface-700 text-white text-sm font-body active:bg-surface-600 transition-colors ${FOCUS}`}>
-            <SlidersHorizontal size={16} aria-hidden="true" />
-            Filtros
-            {filtrosActivos > 0 && (
-              <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-brand-500 text-white text-xs
-                               font-mono flex items-center justify-center"
-                aria-label={`${filtrosActivos} filtro${filtrosActivos !== 1 ? 's' : ''} activo${filtrosActivos !== 1 ? 's' : ''}`}>
-                {filtrosActivos}
-              </span>
-            )}
-          </button>
         </div>
 
-        {/* Estados + orden (misma fila que el buscador en desktop) */}
-        <div id="saldos-filtros"
-          className={`${abierto ? 'flex' : 'hidden'} md:flex flex-col gap-3 md:flex-row md:items-center md:gap-2.5 md:flex-shrink-0`}>
+        {/* Estados + orden (misma fila que el buscador) */}
+        <div id="saldos-filtros" className="flex flex-row items-center gap-2.5 flex-shrink-0">
 
           <div>
-            <span id="saldos-estado-label" className={`${LABEL_CLASS} md:sr-only`}>Estado</span>
-            <div role="group" aria-labelledby="saldos-estado-label"
-              className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:flex md:flex-nowrap md:gap-2.5">
+            <span id="saldos-estado-label" className={`${LABEL_CLASS} sr-only`}>Estado</span>
+            <div role="group" aria-labelledby="saldos-estado-label" className="flex flex-nowrap gap-2.5">
               {ESTADOS.map(({ value, label }) => {
                 const activo = estado === value
                 return (
@@ -895,7 +894,7 @@ function SaldosFilters({ filters, onChange, onClear, filtrosActivos, total }) {
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-2.5">
+          <div className="flex flex-row items-center gap-2.5">
             {estado !== 'pagado' && (
               <button type="button" onClick={() => onChange('sortDias', sortDias === 'asc' ? 'desc' : 'asc')}
                 className={`flex items-center justify-center gap-2 min-h-[44px] md:min-h-[38px] px-4 bg-surface-700/60 border border-surface-600/70
@@ -917,8 +916,7 @@ function SaldosFilters({ filters, onChange, onClear, filtrosActivos, total }) {
             )}
 
             {/* El contador se mantiene para lectores de pantalla; en desktop no se muestra */}
-            <p role="status" aria-live="polite"
-              className="text-surface-400 text-xs font-body text-center md:sr-only">
+            <p role="status" aria-live="polite" className="text-surface-400 text-xs font-body text-center sr-only">
               {total} resultado{total !== 1 ? 's' : ''}
             </p>
           </div>
@@ -1074,20 +1072,6 @@ function SaldosTable({ items, onOpen }) {
           {items.map(s => <SaldoRow key={s.idSaldo} saldo={s} onOpen={onOpen} />)}
         </tbody>
       </table>
-    </div>
-  )
-}
-
-function Pagination({ page, totalPages, total, onPrev, onNext }) {
-  return (
-    <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 border-t border-surface-700">
-      <p className="text-surface-400 text-xs font-body">
-        {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} de {total}
-      </p>
-      <div className="flex gap-2">
-        <Button size="sm" variant="secondary" className="min-h-[44px]" onClick={onPrev} disabled={page === 1}>← Ant.</Button>
-        <Button size="sm" variant="secondary" className="min-h-[44px]" onClick={onNext} disabled={page === totalPages}>Sig. →</Button>
-      </div>
     </div>
   )
 }
@@ -1251,11 +1235,10 @@ export default function Saldos() {
             </>
           )}
 
-          {totalPages > 1 && !hasError && (
-            <Pagination
-              page={page} totalPages={totalPages} total={saldos.length}
-              onPrev={() => { setPage(p => Math.max(1, p - 1)); scrollToStart() }}
-              onNext={() => { setPage(p => Math.min(totalPages, p + 1)); scrollToStart() }}
+          {!hasError && (
+            <PaginadorListado
+              page={page} totalPages={totalPages} pageSize={PAGE_SIZE} total={saldos.length}
+              onChange={(n) => { setPage(n); scrollToStart() }}
             />
           )}
         </Card>

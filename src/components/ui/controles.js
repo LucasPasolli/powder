@@ -15,3 +15,9 @@
 // El umbral 1025 es el mismo que usa el resto del proyecto (useBreakpoint, TOQUE).
 // Uso: sin `py-*` ni `min-h-*` en el mismo elemento (el alto ya está resuelto).
 export const ALTO_CONTROL = 'h-11 min-[1025px]:h-[42px]'
+
+// Tipografía de las ETIQUETAS de campo (MAYÚSCULAS + tracking). Es la misma que usan
+// <Input> y <Select> del sistema de diseño; se expone acá para que los controles que
+// no son de formulario (fecha, chips, casilla) del panel de filtros móvil se vean igual.
+export const CLASE_ETIQUETA =
+  'block text-surface-300 text-sm min-[1025px]:text-xs tracking-widest uppercase font-body'

@@ -19,12 +19,14 @@ import {
 import { supabase } from '../lib/supabase'
 import { MEDIDAS_VALIDAS } from '../lib/medidasProducto'
 import { Button, Card, PageHeader, Modal, Input, Select, Badge } from '../components/ui'
+import FiltrosMovil, { BuscadorListado } from '../components/ui/FiltrosMovil'
+import { useBreakpoint } from '../hooks/useBreakpoint'
 import {
   esBajoStock, estadoStock, etiquetaEstadoStock,
   SORT_OPCIONES, valorOrden, parseOrden,
-  contarFiltrosAvanzados, hayFiltrosActivos as tieneFiltrosActivos,
+  hayFiltrosActivos as tieneFiltrosActivos,
 } from '../lib/inventarioUtils'
-import { Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, PackagePlus, X, CheckCircle2, TrendingUp, FileSpreadsheet, AlertTriangle, Truck, ChevronsUpDown, Check, SlidersHorizontal } from 'lucide-react'
+import { Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, PackagePlus, X, CheckCircle2, TrendingUp, FileSpreadsheet, AlertTriangle, Truck, ChevronsUpDown, Check } from 'lucide-react'
 // NOTA: se usa `exceljs` (y no `xlsx`/SheetJS) porque la edición Community de
 // SheetJS no escribe estilos de celda (negrita, relleno) al generar el
 // archivo: el `.s` que se le asigna a la celda se ignora silenciosamente al
@@ -1026,8 +1028,8 @@ export default function Inventario() {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [toast,         setToast]         = useState(null)
   const [exportando,    setExportando]    = useState(false)
-  // Mobile: los filtros secundarios y el orden viven en un panel colapsable.
-  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false)
+  // Mobile/tablet: filtros y orden viven en el panel del patrón único (<FiltrosMovil>).
+  const { isCompact } = useBreakpoint()
 
   const showToast = useCallback((message, type = 'success') => setToast({ message, type }), [])
 
@@ -1086,11 +1088,40 @@ export default function Inventario() {
 
   const filtros = { searchNombre, searchId, filterCat, filterProveedor, filterStock, filterBajoStock }
   const hayFiltros = tieneFiltrosActivos(filtros)
-  const filtrosAvanzados = contarFiltrosAvanzados(filtros)
 
   function limpiarFiltros() {
     setSearchNombre(''); setSearchId(''); setFilterCat('all')
     setFilterProveedor('all'); setFilterStock('all'); setFilterBajoStock(false)
+  }
+
+  // ── Panel de filtros móvil ────────────────────────────────────────────
+  // El buscador por nombre queda en la pantalla; todo lo demás (ID, categoría, proveedor,
+  // stock, bajo stock y orden) va al panel. Mismo estado que en escritorio: sólo cambia
+  // cómo se presenta y cuándo se aplica.
+  const TODAS = { value: 'all', label: 'Todos' }
+  const valoresPanel = { searchId, filterCat, filterProveedor, filterStock, filterBajoStock, orden: valorOrden(sortKey, sortDir) }
+  const defaultsPanel = {
+    searchId: '', filterCat: 'all', filterProveedor: 'all', filterStock: 'all', filterBajoStock: false,
+    orden: valorOrden('nombre', 'asc'),
+  }
+  const camposPanel = [
+    { tipo: 'texto', clave: 'searchId', etiqueta: 'ID', placeholder: 'Número de producto', inputMode: 'numeric',
+      normalizar: (s) => s.replace(/\D/g, '') },
+    { tipo: 'select', clave: 'filterCat', etiqueta: 'Categoría',
+      opciones: [TODAS, ...categorias.map((c) => ({ value: String(c.idCategoria), label: c.nombre }))] },
+    { tipo: 'select', clave: 'filterProveedor', etiqueta: 'Proveedor',
+      opciones: [TODAS, ...proveedores.map((p) => ({ value: String(p.idProveedor), label: p.nombreComercial || p.nombreFiscal }))] },
+    { tipo: 'select', clave: 'filterStock', etiqueta: 'Stock',
+      opciones: [TODAS, { value: 'con', label: 'Con stock' }, { value: 'sin', label: 'Sin stock' }] },
+    { tipo: 'checkbox', clave: 'filterBajoStock', etiqueta: 'Bajo stock', texto: 'Solo bajo stock' },
+    { tipo: 'select', clave: 'orden', etiqueta: 'Ordenar por',
+      opciones: SORT_OPCIONES.map((o) => ({ value: o.value, label: o.label })) },
+  ]
+  function aplicarPanel(b) {
+    setSearchId(b.searchId); setFilterCat(b.filterCat); setFilterProveedor(b.filterProveedor)
+    setFilterStock(b.filterStock); setFilterBajoStock(b.filterBajoStock)
+    const o = parseOrden(b.orden)
+    setSortKey(o.sortKey); setSortDir(o.sortDir)
   }
 
   const abrirStock    = (p) => { setSelected(p); setModalStock(true) }
@@ -1234,14 +1265,28 @@ export default function Inventario() {
       })()}
 
       {/* Filtros */}
-      {/* 1 columna en mobile · 2 en tablet · una sola fila en desktop.
-          En mobile solo búsqueda por nombre e ID quedan siempre a la vista; el
-          resto (categoría, proveedor, stock, orden) se despliega con un botón
-          que muestra cuántos filtros hay activos. Es el MISMO estado que en
-          desktop: solo cambia cómo se presenta. */}
-      <Card className="p-3 sm:p-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2.2fr)_7rem_repeat(3,minmax(0,1fr))]">
-          <div className="relative sm:col-span-2 lg:col-span-1">
+      {/* Mobile/tablet (≤ 1024px): patrón único del sistema (buscador + botón «Filtros» + panel
+          con borrador). Desktop: una sola fila inline, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosMovil
+          busqueda={(
+            <BuscadorListado id="inv-buscar-nombre" value={searchNombre} onChange={setSearchNombre}
+              placeholder="Buscar por nombre..." etiqueta="Buscar por nombre" />
+          )}
+          value={valoresPanel}
+          defaults={defaultsPanel}
+          campos={camposPanel}
+          onApply={aplicarPanel}
+          debajo={(
+            <p role="status" aria-live="polite" className="sr-only">
+              {productos.length} de {allProductos.length} producto{allProductos.length === 1 ? '' : 's'}
+            </p>
+          )}
+        />
+      ) : (
+      <Card className="p-4">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,2.2fr)_7rem_repeat(3,minmax(0,1fr))]">
+          <div className="relative">
             <label htmlFor="inv-buscar-nombre" className="sr-only">Buscar por nombre</label>
             <Search size={15} aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
             <input id="inv-buscar-nombre" type="text" inputMode="search" enterKeyHint="search" autoComplete="off"
@@ -1258,84 +1303,48 @@ export default function Inventario() {
               className={`${CAMPO_FILTRO} px-4 font-mono`} />
           </div>
 
-          <button type="button" onClick={() => setFiltrosAbiertos((o) => !o)}
-            aria-expanded={filtrosAbiertos} aria-controls="inv-filtros-avanzados"
-            className="sm:hidden flex items-center justify-between gap-2 w-full min-h-[44px] px-4 rounded-xl border border-surface-600
-                       bg-surface-700 text-surface-100 text-base font-body active:bg-surface-600
-                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
-            <span className="flex items-center gap-2">
-              <SlidersHorizontal size={16} aria-hidden="true" />
-              Categoría, proveedor, stock y orden
-              {filtrosAvanzados > 0 && (
-                <span aria-label={`${filtrosAvanzados} filtro${filtrosAvanzados === 1 ? '' : 's'} activo${filtrosAvanzados === 1 ? '' : 's'}`}
-                  className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full bg-brand-500 text-white text-xs font-mono">
-                  {filtrosAvanzados}
-                </span>
-              )}
-            </span>
-            <ChevronDown size={16} aria-hidden="true" className={`flex-shrink-0 transition-transform ${filtrosAbiertos ? 'rotate-180' : ''}`} />
-          </button>
+          <div>
+            <label htmlFor="inv-filtro-cat" className="sr-only">Categoría</label>
+            <select id="inv-filtro-cat" value={filterCat} onChange={(e) => setFilterCat(e.target.value)}
+              className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
+              <option value="all" className="font-body">Todas las categorías</option>
+              {categorias.map((c) => (
+                <option key={c.idCategoria} value={c.idCategoria} className="font-body">{c.nombre}</option>
+              ))}
+            </select>
+          </div>
 
-          {/* `sm:contents`: desde tablet el panel desaparece del árbol de layout
-              y sus campos pasan a ser celdas de la grilla superior. */}
-          <div id="inv-filtros-avanzados"
-            className={`${filtrosAbiertos ? 'grid' : 'hidden'} grid-cols-1 gap-3 sm:contents`}>
-            <div>
-              <label htmlFor="inv-filtro-cat" className="sr-only">Categoría</label>
-              <select id="inv-filtro-cat" value={filterCat} onChange={(e) => setFilterCat(e.target.value)}
-                className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
-                <option value="all" className="font-body">Todas las categorías</option>
-                {categorias.map((c) => (
-                  <option key={c.idCategoria} value={c.idCategoria} className="font-body">{c.nombre}</option>
-                ))}
-              </select>
-            </div>
+          <div>
+            <label htmlFor="inv-filtro-prov" className="sr-only">Proveedor</label>
+            <select id="inv-filtro-prov" value={filterProveedor} onChange={(e) => setFilterProveedor(e.target.value)}
+              className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
+              <option value="all" className="font-body">Todos los proveedores</option>
+              {proveedores.map((p) => (
+                <option key={p.idProveedor} value={p.idProveedor} className="font-body">
+                  {p.nombreComercial || p.nombreFiscal}
+                </option>
+              ))}
+            </select>
+          </div>
 
-            <div>
-              <label htmlFor="inv-filtro-prov" className="sr-only">Proveedor</label>
-              <select id="inv-filtro-prov" value={filterProveedor} onChange={(e) => setFilterProveedor(e.target.value)}
-                className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
-                <option value="all" className="font-body">Todos los proveedores</option>
-                {proveedores.map((p) => (
-                  <option key={p.idProveedor} value={p.idProveedor} className="font-body">
-                    {p.nombreComercial || p.nombreFiscal}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="inv-filtro-stock" className="sr-only">Stock</label>
-              <select id="inv-filtro-stock" value={filterStock} onChange={(e) => setFilterStock(e.target.value)}
-                className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
-                <option value="all" className="font-body">Todo el stock</option>
-                <option value="con" className="font-body">Con stock</option>
-                <option value="sin" className="font-body">Sin stock</option>
-              </select>
-            </div>
-
-            {/* En tarjetas no hay encabezados donde hacer clic para ordenar:
-                este selector escribe en el mismo sortKey/sortDir que la tabla. */}
-            <div className="sm:col-span-2 lg:hidden">
-              <label htmlFor="inv-orden" className="sr-only">Ordenar por</label>
-              <select id="inv-orden" value={valorOrden(sortKey, sortDir)}
-                onChange={(e) => { const o = parseOrden(e.target.value); setSortKey(o.sortKey); setSortDir(o.sortDir) }}
-                className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
-                {SORT_OPCIONES.map((o) => (
-                  <option key={o.value} value={o.value} className="font-body">Ordenar: {o.label}</option>
-                ))}
-              </select>
-            </div>
+          <div>
+            <label htmlFor="inv-filtro-stock" className="sr-only">Stock</label>
+            <select id="inv-filtro-stock" value={filterStock} onChange={(e) => setFilterStock(e.target.value)}
+              className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
+              <option value="all" className="font-body">Todo el stock</option>
+              <option value="con" className="font-body">Con stock</option>
+              <option value="sin" className="font-body">Sin stock</option>
+            </select>
           </div>
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-3 min-h-[44px] sm:min-h-[36px]">
+        <div className="mt-3 flex items-center justify-between gap-3 min-h-[36px]">
           <p role="status" aria-live="polite" className="text-surface-400 text-xs font-body">
             {productos.length} de {allProductos.length} producto{allProductos.length === 1 ? '' : 's'}
           </p>
           {hayFiltros && (
             <button type="button" onClick={limpiarFiltros}
-              className="flex items-center gap-2 min-h-[44px] sm:min-h-0 bg-surface-700 border border-surface-600 rounded-xl px-3 py-2
+              className="flex items-center gap-2 bg-surface-700 border border-surface-600 rounded-xl px-3 py-2
                          text-surface-300 text-sm font-body hover:border-red-500/50 hover:text-red-400
                          hover:bg-red-500/10 transition-all cursor-pointer whitespace-nowrap
                          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
@@ -1344,6 +1353,7 @@ export default function Inventario() {
           )}
         </div>
       </Card>
+      )}
 
       {/* Listado: tarjetas por producto (< lg) · tabla (≥ lg) */}
       <div ref={tableAnchorRef}>

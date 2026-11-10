@@ -7,6 +7,8 @@ import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Pencil, Trash2 } from 'lucide-react'
 import { obtenerPedidos, actualizarEstadosPedido, eliminarPedido } from '../../../services/pedidosService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, normalizarTexto, Pagination, ConfirmModal } from './comunes'
+import { FiltrosGestionMovil, opcionesTodas } from './comunes'
+import { useBreakpoint } from '../../../hooks/useBreakpoint'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PEDIDOS DE COMPRA
@@ -36,6 +38,7 @@ export default function Pedidos() {
   const [editRow, setEditRow] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [search, setSearch] = useState('')
+  const { isCompact } = useBreakpoint()
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(1)
@@ -99,6 +102,15 @@ export default function Pedidos() {
 
   return (
     <div className="space-y-4">
+      {/* Mobile/tablet (≤ 1024px): patrón único de filtros (buscador + botón «Filtros» + panel).
+          Desktop: barra inline original, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosGestionMovil
+          search={search} onSearch={setSearch} placeholder="Buscar por ID o proveedor…"
+          valores={{ desde: dateFrom, hasta: dateTo }}
+          onApply={(b) => { setDateFrom(b.desde); setDateTo(b.hasta) }}
+        />
+      ) : (
       <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center w-full">
         <div className="flex-1">
           <input
@@ -112,6 +124,7 @@ export default function Pedidos() {
         <DateField label="Desde" value={dateFrom} onChange={setDateFrom} />
         <DateField label="Hasta" value={dateTo} onChange={setDateTo} />
       </div>
+      )}
 
       <div ref={tableAnchorRef}>
       <Card>

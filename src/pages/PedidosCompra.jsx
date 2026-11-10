@@ -37,9 +37,10 @@ import ExportarHojaToolbar from '../components/pedidos/ExportarHojaToolbar'
 import { useSeleccionItems } from '../hooks/useSeleccionItems'
 import { useBreakpoint } from '../hooks/useBreakpoint'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
-import FiltrosPedidos, { FILTROS_INICIALES } from '../components/pedidos/FiltrosPedidos'
+import FiltrosPedidos, { FILTROS_INICIALES, contarFiltrosActivos } from '../components/pedidos/FiltrosPedidos'
 import PedidosListado from '../components/pedidos/PedidosListado'
-import PaginadorTabla from '../components/ui/PaginadorTabla'
+import PaginadorListado from '../components/ui/PaginadorListado'
+import KpiCard from '../components/ui/KpiCard'
 import { CuotasPlanDetalle, ItemsPedidoDetalle } from '../components/pedidos/PedidoDetalleListas'
 import { TOUCH, ESTADO_CONFIG, cap, fmt, fmtFecha, metodoPagoLabel } from '../components/pedidos/pedidosPresentacion'
 import { obtenerTieneMedidasPorProductos } from '../services/productosService'
@@ -1571,6 +1572,10 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
 
 const PAGE_SIZE = 20
 
+// ── Resumen (KPIs): misma tarjeta y grilla que Saldos ───────────────────────
+const fmtCompactoARS = (n) =>
+  new Intl.NumberFormat('es-AR', { notation: 'compact', style: 'currency', currency: 'ARS' }).format(n ?? 0)
+
 export default function PedidosCompra() {
   const [cuotasResumen, setCuotasResumen] = useState({}) // { [idPedido]: { cuotasPendientes, montoPendiente, ... } }
   const [vista,        setVista]        = useState('lista') // 'lista' | 'nuevo' | 'detalle' | 'editar'
@@ -1647,6 +1652,10 @@ export default function PedidosCompra() {
     return p.estadoPago === 'pagado' ? acc + p.monto : acc
   }, 0)
 
+  // Búsqueda o cualquier filtro del panel distinto de su valor por defecto.
+  const hayFiltros = contarFiltrosActivos(filtros) > 0 || filtros.filterProv.trim() !== ''
+  const limpiarFiltros = () => setFiltros({ ...FILTROS_INICIALES })
+
   function abrirDetalle(p) { setSelected(p); setVista('detalle') }
   function volverLista()   { setSelected(null); setVista('lista'); load() }
 
@@ -1683,42 +1692,42 @@ export default function PedidosCompra() {
     )
 
   return (
-    <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
+    <div className="w-full min-w-0 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       {toast && <Toast message={toast} onDone={() => setToast('')} />}
 
-      {/* Offline: en mobile la conexión es intermitente; los datos mostrados pueden estar viejos. */}
+      {/* Offline: en mobile la conexión es intermitente; los datos mostrados pueden estar viejos.
+          Mismo banner que Saldos. */}
       {!online && (
-        <div role="status" className="flex items-center gap-2 text-amber-300 text-sm font-body bg-amber-500/10
-                                      border border-amber-500/30 rounded-xl px-4 py-2.5">
-          <WifiOff size={15} className="flex-shrink-0" />
-          Sin conexión: los datos pueden estar desactualizados y no se podrán guardar cambios.
+        <div role="status"
+          className="flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-3">
+          <WifiOff size={16} className="text-yellow-400 flex-shrink-0" aria-hidden="true" />
+          <p className="text-yellow-300 text-xs font-body">
+            Sin conexión. Los datos pueden estar desactualizados y no se podrán guardar cambios.
+          </p>
         </div>
       )}
 
-      <PageHeader
-        title="Pedidos de Compra"
-        subtitle="Órdenes a proveedores"
-        actions={
-          <Button icon={Plus} onClick={() => setVista('nuevo')} className={TOUCH}>Nuevo Pedido</Button>
-        }
-      />
-
-      {/* Resumen: filas compactas en mobile, 3 tarjetas desde tablet */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-4">
-        {[
-          { label: 'Total pedidos',   value: pedidos.length,      color: 'text-white' },
-          { label: 'Deuda pendiente', value: fmt(totalPendiente), color: 'text-yellow-400' },
-          { label: 'Total pagado',    value: fmt(totalPagado),    color: 'text-emerald-400' },
-        ].map(({ label, value, color }) => (
-          <div key={label} className="bg-surface-800 border border-surface-700 rounded-xl px-4 py-3 md:p-4
-                                      flex md:block items-baseline justify-between gap-3">
-            <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body">{label}</p>
-            <p className={`font-display text-xl min-[1025px]:text-2xl tracking-wider min-[1025px]:tracking-widest md:mt-1 ${color}`}>{value}</p>
-          </div>
-        ))}
+      {/* Misma disposición que «Registrar Pago Parcial» (Saldos) y «Nuevo Producto» (Inventario):
+          mobile → botón a ancho completo bajo el título; ≥ sm → a la derecha del encabezado. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <PageHeader title="Pedidos de Compra" subtitle="Órdenes a proveedores" />
+        <Button icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('nuevo')}>
+          Nuevo Pedido
+        </Button>
       </div>
 
-      <FiltrosPedidos value={filtros} onChange={setFiltros} compact={isCompact} />
+      {/* Resumen: mismas tarjetas que Saldos — 2 columnas en mobile (la primera ocupa el ancho
+          completo para que «Deuda» y «Pagado» queden lado a lado), 3 columnas desde tablet. */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+        <KpiCard label="Total pedidos" value={pedidos.length} valueClass="text-white"
+          hint="según los filtros aplicados" className="col-span-2 md:col-span-1" />
+        <KpiCard label="Deuda pendiente" value={fmtCompactoARS(totalPendiente)} title={fmt(totalPendiente)}
+          valueClass="text-yellow-400" hint="por pagar a proveedores" />
+        <KpiCard label="Total pagado" value={fmtCompactoARS(totalPagado)} title={fmt(totalPagado)}
+          valueClass="text-emerald-400" hint="ya abonado" />
+      </div>
+
+      <FiltrosPedidos value={filtros} onChange={setFiltros} compact={isCompact} total={filteredPedidos.length} />
 
       {/* Listado + paginador en UN solo Card (igual que Inventario). El ancla marca el inicio de la lista. */}
       <div ref={tableAnchorRef}>
@@ -1730,8 +1739,10 @@ export default function PedidosCompra() {
           error={error}
           onRetry={load}
           onAbrir={abrirDetalle}
+          hayFiltros={hayFiltros}
+          onLimpiarFiltros={limpiarFiltros}
           footer={
-            <PaginadorTabla
+            <PaginadorListado
               page={page} totalPages={totalPages} pageSize={PAGE_SIZE} total={filteredPedidos.length}
               onChange={(n) => { setPage(n); scrollToStart() }}
             />

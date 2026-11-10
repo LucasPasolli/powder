@@ -10,6 +10,8 @@ import { eliminarPresupuestoConReintegro } from '../../../services/presupuestosI
 import { ErrorOperacion } from '../../../services/idempotencia'
 import { obtenerSplitsPorPresupuestos } from '../../../services/pagoSplitService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, Pagination, ConfirmModal, InfoBanner, dropdownClass } from './comunes'
+import { FiltrosGestionMovil, opcionesTodas } from './comunes'
+import { useBreakpoint } from '../../../hooks/useBreakpoint'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PRESUPUESTOS
@@ -36,6 +38,7 @@ export default function Presupuestos() {
   const [deleteError, setDeleteError] = useState('')
   const [resumenEliminacion, setResumenEliminacion] = useState(null)
   const [search, setSearch] = useState('')
+  const { isCompact } = useBreakpoint()
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filtroEstado, setFiltroEstado] = useState('')
@@ -212,6 +215,17 @@ export default function Presupuestos() {
         <InfoBanner message={resumenEliminacion} onClose={() => setResumenEliminacion(null)} />
       )}
 
+      {/* Mobile/tablet (≤ 1024px): patrón único de filtros (buscador + botón «Filtros» + panel).
+          Desktop: barra inline original, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosGestionMovil
+          search={search} onSearch={setSearch} placeholder="Buscar por ID o cliente…"
+          valores={{ desde: dateFrom, hasta: dateTo, estado: filtroEstado }}
+          onApply={(b) => { setDateFrom(b.desde); setDateTo(b.hasta); setFiltroEstado(b.estado) }}
+          selects={[{ clave: 'estado', etiqueta: 'Estado', opciones: opcionesTodas(
+            ['borrador', 'aprobado', 'pagado', 'rechazado'].map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))) }]}
+        />
+      ) : (
       <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center w-full">
         <div className="flex-1">
           <input
@@ -233,6 +247,7 @@ export default function Presupuestos() {
           </select>
         </div>
       </div>
+      )}
 
       <div ref={tableAnchorRef}>
       <Card>
