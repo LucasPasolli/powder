@@ -317,6 +317,22 @@ function PresupuestosTable({ items, onOpen, sortKey, sortDir, onSort }) {
   )
 }
 
+// Fila de la tarjeta de totales: etiqueta a la izquierda, monto a la derecha.
+//  · La etiqueta puede ocupar varias líneas (`min-w-0`): con etiquetas largas, como
+//    "Ajuste por método de pago [Excepción]:", cede espacio en lugar de empujar el monto.
+//  · El monto NUNCA se parte ni se corta (`shrink-0` + `whitespace-nowrap`).
+//  · Antes la etiqueta era `shrink-0` y el monto no estaba protegido: etiqueta + `gap-8`
+//    + monto superaban el ancho mobile y el monto se salía de la tarjeta.
+// En desktop (contenedor `sm:w-fit`) cada fila mide su contenido, así que no se ajusta nada.
+function FilaTotal({ etiqueta, valor, alineacion = 'items-start', className = '', etiquetaClassName = '', valorClassName = '' }) {
+  return (
+    <div className={`flex justify-between ${alineacion} gap-x-3 sm:gap-x-8 ${className}`}>
+      <span className={`min-w-0 ${etiquetaClassName}`}>{etiqueta}</span>
+      <span className={`shrink-0 whitespace-nowrap text-right ${valorClassName}`}>{valor}</span>
+    </div>
+  )
+}
+
 // Cuadro de información de la cabecera del detalle (Fecha · Cliente · Método).
 // Única fuente de padding, radio, color y estilo de la etiqueta: los tres cuadros
 // no pueden divergir. `min-w-0` permite que el contenido largo se ajuste dentro
@@ -789,42 +805,50 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
       {/* Totales — ahora usa totalesDetalle memoizado */}
       <Card className="p-6">
         <div className="w-full sm:ml-auto sm:w-fit sm:min-w-[280px] space-y-2 text-sm font-body">
-          <div className="flex justify-between gap-8">
-            <span className="text-surface-400 shrink-0">Subtotal (lista):</span>
-            <span className="text-surface-200 font-mono text-right">{fmt(totalesDetalle.precioLista)}</span>
-          </div>
+          <FilaTotal
+            etiqueta="Subtotal (lista):"
+            etiquetaClassName="text-surface-400"
+            valor={fmt(totalesDetalle.precioLista)}
+            valorClassName="text-surface-200 font-mono"
+          />
           {totalesDetalle.ahorroPromo > 0.01 && (
             <>
-              <div className="flex justify-between gap-8 items-center">
-                <span className="flex items-center gap-1.5 text-emerald-400 shrink-0">
-                  <Tag size={11} />Ahorro por promociones:
-                </span>
-                <span className="text-emerald-400 font-mono font-medium text-right">− {fmt(totalesDetalle.ahorroPromo)}</span>
-              </div>
-              <div className="flex justify-between gap-8">
-                <span className="text-surface-400 shrink-0">Subtotal con promos:</span>
-                <span className="text-surface-200 font-mono text-right">{fmt(totalesDetalle.subtotalConPromo)}</span>
-              </div>
+              <FilaTotal
+                alineacion="items-center"
+                etiqueta={<span className="flex items-center gap-1.5"><Tag size={11} className="shrink-0" />Ahorro por promociones:</span>}
+                etiquetaClassName="text-emerald-400"
+                valor={`− ${fmt(totalesDetalle.ahorroPromo)}`}
+                valorClassName="text-emerald-400 font-mono font-medium"
+              />
+              <FilaTotal
+                etiqueta="Subtotal con promos:"
+                etiquetaClassName="text-surface-400"
+                valor={fmt(totalesDetalle.subtotalConPromo)}
+                valorClassName="text-surface-200 font-mono"
+              />
             </>
           )}
-          <div className="flex justify-between gap-8">
-            <span className="text-surface-400 shrink-0">
+          <FilaTotal
+            etiqueta={<>
               Ajuste por método de pago
               {esExcepcion && totalesDetalle.ajusteMetodo !== 0 && (
-                <span className="ml-1 text-xs text-violet-400 font-body">[Excepción]</span>
+                <span className="ml-1 whitespace-nowrap text-xs text-violet-400 font-body">[Excepción]</span>
               )}:
-            </span>
-            <span className={`font-mono font-medium text-right ${
+            </>}
+            etiquetaClassName="text-surface-400"
+            valor={Math.abs(totalesDetalle.ajusteMetodo) < 0.01 ? '—'
+              : totalesDetalle.ajusteMetodo < 0 ? `- ${fmt(Math.abs(totalesDetalle.ajusteMetodo))}` : `+ ${fmt(totalesDetalle.ajusteMetodo)}`}
+            valorClassName={`font-mono font-medium ${
               Math.abs(totalesDetalle.ajusteMetodo) < 0.01 ? 'text-surface-400'
-              : totalesDetalle.ajusteMetodo < 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {Math.abs(totalesDetalle.ajusteMetodo) < 0.01 ? '—'
-                : totalesDetalle.ajusteMetodo < 0 ? `- ${fmt(Math.abs(totalesDetalle.ajusteMetodo))}` : `+ ${fmt(totalesDetalle.ajusteMetodo)}`}
-            </span>
-          </div>
-          <div className="border-t border-surface-700 pt-2 flex justify-between gap-8">
-            <span className="text-white font-semibold shrink-0">Total:</span>
-            <span className="text-brand-400 font-mono font-bold text-lg text-right">{fmt(pres.monto)}</span>
-          </div>
+              : totalesDetalle.ajusteMetodo < 0 ? 'text-emerald-400' : 'text-red-400'}`}
+          />
+          <FilaTotal
+            className="border-t border-surface-700 pt-2"
+            etiqueta="Total:"
+            etiquetaClassName="text-white font-semibold"
+            valor={fmt(pres.monto)}
+            valorClassName="text-brand-400 font-mono font-bold text-lg"
+          />
         </div>
       </Card>
 
