@@ -38,6 +38,7 @@ import { registrarPagoSplit, obtenerPagoSplit, obtenerSplitsPorPresupuestos, Err
 import { esMetodoElegibleSplit, ETIQUETA_METODO, METODOS_SPLIT, fmtPct } from '../lib/pagoSplit'
 import { useDebounce } from '../hooks/useDebounce'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
+import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { derivarFactorAjustable, tienePromocion } from '../lib/calculoPresupuesto'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -1086,6 +1087,9 @@ export default function Historial() {
   // ── Vista activa ──────────────────────────────────────────────────────────
   const [selected, setSelected] = useState(null)
   const [editando, setEditando] = useState(null)
+  // Mobile/tablet: lista → detalle → edición se alternan por estado (sin cambiar la URL);
+  // cada vista nueva debe arrancar desde el inicio. Va antes de los `return` condicionales.
+  useScrollToTopOnView(editando ? `editar:${editando}` : selected ? `detalle:${selected.idPresupuesto}` : 'lista')
 
   // ── Debounce del buscador ─────────────────────────────────────────────────
   // El input actualiza `search` en cada keystroke (fluido para el usuario),

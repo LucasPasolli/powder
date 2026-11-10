@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { usePaginatedList } from '../hooks/usePaginatedList'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
+import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { supabase } from '../lib/supabase'
 import { Card, PageHeader, Button, Badge, Modal, Input } from '../components/ui'
 import {
@@ -1580,6 +1581,9 @@ export default function PedidosCompra() {
   const [cuotasResumen, setCuotasResumen] = useState({}) // { [idPedido]: { cuotasPendientes, montoPendiente, ... } }
   const [vista,        setVista]        = useState('lista') // 'lista' | 'nuevo' | 'detalle' | 'editar'
   const [selected,     setSelected]     = useState(null)
+  // Mobile/tablet: lista / nuevo / detalle / editar se alternan por estado (sin cambiar la URL);
+  // cada vista nueva debe arrancar desde el inicio. Va antes de los `return` condicionales.
+  useScrollToTopOnView(`${vista}:${selected?.idPedido ?? ''}`)
   // Filtros aplicados: un solo objeto en el padre, por eso sobreviven a la rotación del equipo
   // (FiltrosPedidos sólo guarda un borrador mientras su panel está abierto).
   const [filtros,     setFiltros]      = useState(FILTROS_INICIALES)

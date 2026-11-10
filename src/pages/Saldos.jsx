@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { usePaginatedList } from '../hooks/usePaginatedList'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
+import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { useDebounce } from '../hooks/useDebounce'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import {
@@ -1149,6 +1150,10 @@ export default function Saldos() {
   const hasError = Boolean(error)
 
   const { anchorRef: tableAnchorRef, scrollToStart } = useScrollAnchor()
+
+  // Mobile/tablet: lista ↔ detalle se alternan por estado (sin cambiar la URL);
+  // cada vista nueva debe arrancar desde el inicio. Va antes del `return` condicional.
+  useScrollToTopOnView(selected ? `detalle:${selected.idSaldo ?? selected.idPresupuesto}` : 'lista')
 
   function handleUpdated(msg) {
     setToast(msg)
