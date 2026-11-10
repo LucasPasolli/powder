@@ -317,6 +317,19 @@ function PresupuestosTable({ items, onOpen, sortKey, sortDir, onSort }) {
   )
 }
 
+// Cuadro de información de la cabecera del detalle (Fecha · Cliente · Método).
+// Única fuente de padding, radio, color y estilo de la etiqueta: los tres cuadros
+// no pueden divergir. `min-w-0` permite que el contenido largo se ajuste dentro
+// del cuadro en lugar de ensancharlo (un ítem de grilla tiene min-width:auto).
+function CuadroInfo({ etiqueta, className = '', children }) {
+  return (
+    <div className={`min-w-0 bg-surface-700 rounded-xl p-4 ${className}`}>
+      <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">{etiqueta}</p>
+      {children}
+    </div>
+  )
+}
+
 // ─── Vista detalle ─────────────────────────────────────────────────────────
 
 function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar, onNavigarSaldo }) {
@@ -578,45 +591,49 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-          <div className="bg-surface-700 rounded-xl p-4">
-            <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Fecha</p>
+        {/* Cuadros de información.
+            · Mobile y tablet (≤ 1024 px): UNA columna → Fecha, Cliente y Método ocupan
+              exactamente el mismo ancho y comparten borde izquierdo y derecho; sólo el
+              alto varía con el contenido. (Antes, `col-span-2` en una grilla de 1 columna
+              creaba una 2.ª columna implícita y los anchos se desparejaban.)
+            · Desktop (≥ 1025 px, mismo umbral que AppShell/useBreakpoint): grilla original
+              de 4 columnas con Cliente a doble ancho. */}
+        <div className="grid grid-cols-1 min-[1025px]:grid-cols-4 gap-3 sm:gap-4">
+          <CuadroInfo etiqueta="Fecha">
             <p className="text-white text-sm font-mono">{fmtFecha(pres.fecha)}</p>
-          </div>
-          <div className="bg-surface-700 rounded-xl p-4 col-span-2">
-            <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Cliente</p>
+          </CuadroInfo>
+          <CuadroInfo etiqueta="Cliente" className="min-[1025px]:col-span-2">
             {cliente
               ? <>
-                  <p className="text-white text-sm font-body font-medium">{cliente.nombre} {cliente.apellido}</p>
-                  <p className="text-surface-400 text-xs font-mono mt-0.5">
+                  <p className="text-white text-sm font-body font-medium break-words">{cliente.nombre} {cliente.apellido}</p>
+                  <p className="text-surface-400 text-xs font-mono mt-0.5 break-words">
                     ID #{cliente.idCliente}{cliente.telefono ? ` · ${cliente.telefono}` : ''}
                   </p>
                 </>
               : <>
-                  <p className="text-white text-sm font-body font-medium">
+                  <p className="text-white text-sm font-body font-medium break-words">
                     {pres.nombreCliente ? `${pres.nombreCliente} ${pres.apellidoCliente ?? ''}`.trim() : `ID #${pres.idCliente}`}
                   </p>
-                  <p className="text-surface-500 text-xs font-mono mt-0.5">Cliente eliminado · ID #{pres.idCliente}</p>
+                  <p className="text-surface-500 text-xs font-mono mt-0.5 break-words">Cliente eliminado · ID #{pres.idCliente}</p>
                 </>
             }
-          </div>
-          <div className="bg-surface-700 rounded-xl p-4">
-            <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Método</p>
-            <p className="text-white text-sm font-body">
+          </CuadroInfo>
+          <CuadroInfo etiqueta="Método">
+            <p className="text-white text-sm font-body break-words">
               {(() => {
                 const etiqueta = pagoSplit ? 'Split Payment' : metodo.label
                 return esExcepcion ? `Excepción (${etiqueta})` : etiqueta
               })()}
             </p>
             {pagoSplit && (
-              <p className="text-surface-400 text-xs font-mono mt-0.5 tabular-nums">
+              <p className="text-surface-400 text-xs font-mono mt-0.5 tabular-nums break-words">
                 {METODOS_SPLIT.map((m) => `${ETIQUETA_METODO[m]} ${fmtPct(pagoSplit[m].porcentaje)}`).join(' · ')}
               </p>
             )}
             <p className={`text-xs font-mono mt-0.5 ${factorReal < 1 ? 'text-emerald-400' : factorReal > 1 ? 'text-red-400' : 'text-surface-500'}`}>
               {ajusteLabel}
             </p>
-          </div>
+          </CuadroInfo>
         </div>
 
         {/* Acciones */}
