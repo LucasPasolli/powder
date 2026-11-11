@@ -45,7 +45,7 @@ export default function BorradorBanner({ aviso, verificando, onCerrar, onDescart
     <div
       role="status"
       aria-live="polite"
-      className={`rounded-2xl border px-5 py-4 space-y-3 animate-slide-up motion-reduce:animate-none
+      className={`rounded-2xl border px-4 sm:px-5 py-4 space-y-3 animate-slide-up motion-reduce:animate-none
         ${hayGraves ? 'bg-yellow-900/20 border-yellow-500/40' : 'bg-brand-500/10 border-brand-500/30'}`}
     >
       <div className="flex items-start gap-3">
@@ -70,7 +70,7 @@ export default function BorradorBanner({ aviso, verificando, onCerrar, onDescart
           {cambios.length > 0 && (
             <ul className="space-y-1">
               {cambios.map((c, i) => (
-                <li key={i} className={`text-xs font-body ${c.grave ? 'text-yellow-300' : 'text-surface-200'}`}>
+                <li key={i} className={`text-sm min-[1025px]:text-xs font-body break-words ${c.grave ? 'text-yellow-300' : 'text-surface-200'}`}>
                   • {c.texto}
                 </li>
               ))}
@@ -97,13 +97,13 @@ export default function BorradorBanner({ aviso, verificando, onCerrar, onDescart
         <button
           type="button"
           onClick={onDescartar}
-          className="px-3 py-1.5 rounded-lg text-xs font-body text-red-400 hover:text-red-300 hover:bg-red-500/10
+          className="px-3 py-1.5 min-h-[44px] min-[1025px]:min-h-0 rounded-lg text-sm min-[1025px]:text-xs font-body text-red-400 hover:text-red-300 hover:bg-red-500/10
                      focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 transition-colors"
         >
           Descartar borrador
         </button>
         {!verificando && (
-          <Button size="sm" variant="secondary" onClick={onCerrar}>Entendido</Button>
+          <Button size="sm" variant="secondary" onClick={onCerrar} className="min-h-[44px] min-[1025px]:min-h-0">Entendido</Button>
         )}
       </div>
     </div>
