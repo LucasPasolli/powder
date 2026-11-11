@@ -1,25 +1,36 @@
 // src/hooks/useDropdownAnclado.js
 // Estilo de posición de un desplegable que se renderiza en un portal (document.body)
-// anclado a un campo. Dos modos, elegidos por `compacto`:
+// anclado a un campo. Siempre `position: absolute` en coordenadas de DOCUMENTO
+// (rect + scroll), debajo del campo:
 //
-//   • ESCRITORIO (compacto = false): el cálculo histórico, sin cambios — `position: absolute`
-//     en coordenadas de documento, ancho = max(ancho del campo, anchoMinimo).
-//   • COMPACTO (mobile/tablet): `position: fixed` + `calcularPosicionDropdown` (recorte al
-//     ancho de pantalla, apertura hacia arriba si no hay lugar, altura limitada al área
-//     visible descontando el teclado virtual).
+//   • ESCRITORIO (compacto = false): el cálculo histórico, sin cambios — ancho =
+//     max(ancho del campo, anchoMinimo).
+//   • COMPACTO (mobile/tablet): `calcularPosicionDropdown` (recorte al ancho de pantalla,
+//     altura limitada al área visible descontando el teclado virtual). Si el teclado deja
+//     poco espacio debajo del campo, se desplaza la página UNA vez al abrir para que la
+//     lista tenga lugar (no se abre hacia arriba: ver nota en lib/posicionDropdown.js).
 //
 // Se recalcula al hacer scroll, redimensionar y cuando cambia el viewport visual (apertura
 // del teclado). Devuelve `null` mientras está cerrado o antes de la primera medición, para
 // no dibujar un cuadro en (0, 0).
 
 import { useLayoutEffect, useState } from 'react'
-import { aEstiloFijo, calcularPosicionDropdown } from '../lib/posicionDropdown'
+import { calcularDesplazamientoParaDropdown, calcularPosicionDropdown } from '../lib/posicionDropdown'
 
 const iguales = (a, b) => {
   if (a === b) return true
   if (!a || !b) return false
   const ka = Object.keys(a)
   return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k])
+}
+
+const areaVisible = () => {
+  const vv = window.visualViewport
+  return {
+    ancho: document.documentElement.clientWidth,
+    arriba: vv ? vv.offsetTop : 0,
+    abajo: vv ? vv.offsetTop + vv.height : window.innerHeight,
+  }
 }
 
 /**
@@ -38,6 +49,7 @@ export function useDropdownAnclado({ abierto, anclaRef, compacto, anchoMinimo = 
     if (!abierto) { setEstilo(null); return undefined }
 
     let raf = 0
+    let desplazado = false // el ajuste de scroll se hace una sola vez por apertura
     const vv = window.visualViewport
 
     const medir = () => {
@@ -45,18 +57,30 @@ export function useDropdownAnclado({ abierto, anclaRef, compacto, anchoMinimo = 
       const el = anclaRef.current
       if (!el) return
       const rect = el.getBoundingClientRect()
+
+      if (compacto && !desplazado) {
+        desplazado = true
+        const dy = calcularDesplazamientoParaDropdown({ ancla: rect, area: areaVisible() })
+        if (dy > 0) {
+          window.scrollBy(0, dy)
+          // El scroll dispara el evento y se vuelve a medir con la posición ya corregida.
+          pedir()
+          return
+        }
+      }
+
       const siguiente = compacto
-        ? aEstiloFijo(calcularPosicionDropdown({
-            ancla: rect,
-            area: {
-              ancho: document.documentElement.clientWidth,
-              arriba: vv ? vv.offsetTop : 0,
-              abajo: vv ? vv.offsetTop + vv.height : window.innerHeight,
-            },
-            alturaLayout: window.innerHeight,
-            anchoMinimo,
-            alturaMaxima,
-          }))
+        ? (() => {
+            const pos = calcularPosicionDropdown({ ancla: rect, area: areaVisible(), anchoMinimo, alturaMaxima })
+            return {
+              position: 'absolute',
+              top: pos.top + window.scrollY,
+              left: pos.left + window.scrollX,
+              width: pos.width,
+              maxHeight: pos.maxHeight,
+              zIndex: 9999,
+            }
+          })()
         : {
             position: 'absolute',
             top: rect.bottom + window.scrollY + 4,
@@ -66,7 +90,7 @@ export function useDropdownAnclado({ abierto, anclaRef, compacto, anchoMinimo = 
           }
       setEstilo((previo) => (iguales(previo, siguiente) ? previo : siguiente))
     }
-    const pedir = () => { if (!raf) raf = requestAnimationFrame(medir) }
+    function pedir() { if (!raf) raf = requestAnimationFrame(medir) }
 
     medir()
     window.addEventListener('scroll', pedir, true)

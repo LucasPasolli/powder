@@ -9,14 +9,20 @@
 // la pantalla (contenido cortado + scroll horizontal). Además, con el teclado virtual
 // abierto, la lista nacía por debajo del área visible.
 //
+// DECISIÓN DE DISEÑO (fix iPhone): el desplegable SIEMPRE se ancla debajo del campo, con
+// `top`. Una versión anterior lo abría hacia arriba usando `bottom`; en iOS Safari el
+// alto de referencia de `bottom` (viewport de layout, barra del navegador, teclado) no
+// coincide con `window.innerHeight` y la lista terminaba flotando lejos del campo,
+// encima de otros componentes. `top` sólo depende de `getBoundingClientRect()` y es
+// confiable. Cuando el teclado deja poco espacio debajo, en lugar de invertir la lista
+// se DESPLAZA la página (ver `calcularDesplazamientoParaDropdown`).
+//
 // Esta función recibe sólo números (sin DOM) para poder testearla sin navegador:
 //   • recorta horizontalmente al ancho útil (margen a cada lado);
 //   • en pantallas angostas ocupa todo el ancho útil (objetivo táctil cómodo);
-//   • decide si abre hacia abajo o hacia ARRIBA según el espacio realmente visible
-//     (descontando el teclado virtual) y limita la altura a ese espacio.
+//   • limita la altura al espacio visible bajo el campo (descontando el teclado).
 //
-// Sistema de coordenadas: el de `getBoundingClientRect()` (viewport de layout) y el
-// de `position: fixed`. El área visible se expresa en ese mismo sistema.
+// Sistema de coordenadas: el de `getBoundingClientRect()` (viewport de layout).
 
 /** @typedef {{ top: number, bottom: number, left: number, width: number }} RectAncla */
 /** @typedef {{ ancho: number, arriba: number, abajo: number }} AreaVisible
@@ -26,29 +32,29 @@
 /** Por debajo de este ancho el desplegable ocupa todo el ancho útil (celular). */
 export const ANCHO_CELULAR_PX = 640
 
+/** Espacio libre bajo el campo por debajo del cual conviene desplazar la página. */
+export const ALTURA_MINIMA_PX = 160
+
 const acotar = (n, min, max) => Math.min(Math.max(n, min), max)
 
 /**
  * @param {object} p
  * @param {RectAncla} p.ancla
  * @param {AreaVisible} p.area
- * @param {number} p.alturaLayout   `window.innerHeight` (referencia de `bottom` en position: fixed).
  * @param {number} [p.anchoMinimo]  Ancho mínimo deseado en pantallas no angostas.
  * @param {number} [p.margen]       Aire contra los bordes de pantalla.
  * @param {number} [p.separacion]   Distancia entre el campo y el desplegable.
  * @param {number} [p.alturaMaxima] Tope de altura del desplegable.
- * @param {number} [p.alturaMinima] Espacio que se prefiere tener antes de abrir hacia arriba.
- * @returns {{ left: number, width: number, maxHeight: number, arriba: boolean, top?: number, bottom?: number }}
+ * @returns {{ left: number, width: number, top: number, maxHeight: number }}
+ *          `top` en coordenadas de viewport (sumar el scroll para posición absoluta).
  */
 export function calcularPosicionDropdown({
   ancla,
   area,
-  alturaLayout,
   anchoMinimo = 300,
   margen = 8,
   separacion = 4,
   alturaMaxima = 260,
-  alturaMinima = 160,
 }) {
   // ── Horizontal ────────────────────────────────────────────────────────────
   const anchoUtil = Math.max(0, area.ancho - margen * 2)
@@ -56,22 +62,35 @@ export function calcularPosicionDropdown({
   const width = Math.min(anchoDeseado, anchoUtil)
   const left = acotar(ancla.left, margen, Math.max(margen, area.ancho - margen - width))
 
-  // ── Vertical ──────────────────────────────────────────────────────────────
+  // ── Vertical: siempre debajo del campo ────────────────────────────────────
   const espacioAbajo = area.abajo - ancla.bottom - separacion - margen
-  const espacioArriba = ancla.top - area.arriba - separacion - margen
-  // Se abre hacia arriba sólo si abajo no alcanza Y arriba hay más lugar.
-  const arriba = espacioAbajo < alturaMinima && espacioArriba > espacioAbajo
-  const espacio = arriba ? espacioArriba : espacioAbajo
   // Piso de 96 px: aun en landscape con teclado, que se vean al menos ~2 resultados.
-  const maxHeight = Math.round(Math.min(alturaMaxima, Math.max(espacio, 96)))
+  const maxHeight = Math.round(Math.min(alturaMaxima, Math.max(espacioAbajo, 96)))
 
-  return arriba
-    ? { left, width, maxHeight, arriba, bottom: Math.round(alturaLayout - ancla.top + separacion) }
-    : { left, width, maxHeight, arriba, top: Math.round(ancla.bottom + separacion) }
+  return { left, width, top: Math.round(ancla.bottom + separacion), maxHeight }
 }
 
-/** Traduce el resultado a un objeto `style` de React (position: fixed). */
-export function aEstiloFijo(pos, zIndex = 9999) {
-  const { left, width, maxHeight, top, bottom } = pos
-  return { position: 'fixed', left, width, maxHeight, zIndex, ...(top != null ? { top } : { bottom }) }
+/**
+ * Cuántos px hay que scrollear la página (hacia abajo) para que el campo quede cerca del
+ * borde superior de la zona visible y el desplegable tenga lugar debajo. 0 si ya alcanza.
+ * @param {object} p
+ * @param {RectAncla} p.ancla
+ * @param {AreaVisible} p.area
+ * @param {number} [p.margenSuperior] Espacio a respetar arriba (barra fija de la app).
+ * @param {number} [p.alturaMinima]
+ * @param {number} [p.separacion]
+ * @param {number} [p.margen]
+ */
+export function calcularDesplazamientoParaDropdown({
+  ancla,
+  area,
+  margenSuperior = 72,
+  alturaMinima = ALTURA_MINIMA_PX,
+  separacion = 4,
+  margen = 8,
+}) {
+  const espacioAbajo = area.abajo - ancla.bottom - separacion - margen
+  if (espacioAbajo >= alturaMinima) return 0
+  const destino = area.arriba + margenSuperior
+  return Math.max(0, Math.round(ancla.top - destino))
 }
