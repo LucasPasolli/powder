@@ -7,6 +7,8 @@ import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { obtenerEgresos, crearEgreso, actualizarEgreso, eliminarEgreso } from '../../../services/movimientosService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, cap, normalizarTexto, Pagination, ConfirmModal, dropdownClass } from './comunes'
+import { FiltrosGestionMovil, opcionesTodas } from './comunes'
+import { useBreakpoint } from '../../../hooks/useBreakpoint'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // EGRESOS
@@ -23,6 +25,7 @@ export default function Egresos() {
   const [confirm, setConfirm] = useState(null)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const { isCompact } = useBreakpoint()
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filtCat, setFiltCat] = useState('')
@@ -89,6 +92,22 @@ export default function Egresos() {
 
   return (
     <div className="space-y-4">
+      {/* Mobile/tablet (≤ 1024px): patrón único de filtros (buscador + botón «Filtros» + panel).
+          Desktop: barra inline original, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosGestionMovil
+          search={search} onSearch={setSearch} placeholder="Buscar por descripción…"
+          valores={{ desde: dateFrom, hasta: dateTo, categoria: filtCat, metodo: filtMetodo }}
+          onApply={(b) => { setDateFrom(b.desde); setDateTo(b.hasta); setFiltCat(b.categoria); setFiltMetodo(b.metodo) }}
+          selects={[
+            { clave: 'categoria', etiqueta: 'Categoría', opciones: opcionesTodas(CATEGORIAS_EGRESO, 'Todas') },
+            { clave: 'metodo', etiqueta: 'Método de pago', opciones: opcionesTodas([
+              { value: 'efectivo', label: 'Efectivo' }, { value: 'transferencia', label: 'Transferencia' }, { value: 'cheque', label: 'Cheque' },
+            ]) },
+          ]}
+          acciones={<Button icon={Plus} onClick={openCreate}>Nuevo egreso</Button>}
+        />
+      ) : (
       <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center w-full">
         <div className="flex-1 min-w-[160px]">
           <input
@@ -117,6 +136,7 @@ export default function Egresos() {
         </div>
         <Button icon={Plus} onClick={openCreate}>Nuevo egreso</Button>
       </div>
+      )}
 
       <div ref={tableAnchorRef}>
       <Card>

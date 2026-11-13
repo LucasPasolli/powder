@@ -3,7 +3,52 @@
 import { useState, useEffect } from 'react'
 import { Button, Modal } from '../../../components/ui'
 import { ALTO_CONTROL } from '../../../components/ui/controles'
+import FiltrosMovil, { BuscadorListado, mensajeRangoInvalido } from '../../../components/ui/FiltrosMovil'
 import { AlertTriangle, Info } from 'lucide-react'
+
+// ─── Filtros mobile/tablet (patrón único) ─────────────────────────────────────
+
+/** Opciones de un select de filtro: «Todos/Todas» (valor '') + la lista (strings u objetos {value,label}). */
+export const opcionesTodas = (lista, etiquetaTodas = 'Todos') => [
+  { value: '', label: etiquetaTodas },
+  ...lista.map((o) => (typeof o === 'string' ? { value: o, label: o } : o)),
+]
+
+/**
+ * Barra de filtros móvil de las pantallas de gestión: buscador + botón «Filtros» y panel con
+ * Desde / Hasta + los selects indicados. Debajo van las acciones de la pantalla (Nuevo…).
+ * Todos los valores por defecto son '' («Todos», fechas vacías).
+ *
+ * @param {object} props
+ * @param {string} props.search
+ * @param {(texto: string) => void} props.onSearch
+ * @param {string} props.placeholder
+ * @param {Record<string, string>} props.valores  Valores APLICADOS: { desde, hasta, ...claves de selects }.
+ * @param {(borrador: Record<string, string>) => void} props.onApply
+ * @param {{clave: string, etiqueta: string, opciones: {value: string, label: string}[]}[]} [props.selects]
+ * @param {React.ReactNode} [props.acciones]
+ */
+export function FiltrosGestionMovil({ search, onSearch, placeholder, valores, onApply, selects = [], acciones }) {
+  const campos = [
+    { tipo: 'fecha', clave: 'desde', etiqueta: 'Desde', max: (b) => b.hasta || undefined },
+    { tipo: 'fecha', clave: 'hasta', etiqueta: 'Hasta', min: (b) => b.desde || undefined },
+    ...selects.map((s) => ({ tipo: 'select', ...s })),
+  ]
+  const defaults = Object.fromEntries(Object.keys(valores).map((k) => [k, '']))
+  return (
+    <div className="space-y-2">
+      <FiltrosMovil
+        busqueda={<BuscadorListado value={search} onChange={onSearch} placeholder={placeholder} />}
+        value={valores}
+        defaults={defaults}
+        campos={campos}
+        validar={(b) => mensajeRangoInvalido(b.desde, b.hasta)}
+        onApply={onApply}
+      />
+      {acciones && <div className="flex flex-col gap-2">{acciones}</div>}
+    </div>
+  )
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -59,8 +104,8 @@ export function Pagination({ page, total, pageSize, onChange, onNavigate }) {
         {from}–{to} de {total}
       </p>
       <div className="flex gap-2">
-        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => goTo(Math.max(1, page - 1))} disabled={page === 1}>← Anterior</Button>
-        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => goTo(Math.min(totalPages, page + 1))} disabled={page === totalPages}>Siguiente →</Button>
+        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none min-h-[44px] min-[1025px]:min-h-0 justify-center" onClick={() => goTo(Math.max(1, page - 1))} disabled={page === 1}>← Anterior</Button>
+        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none min-h-[44px] min-[1025px]:min-h-0 justify-center" onClick={() => goTo(Math.min(totalPages, page + 1))} disabled={page === totalPages}>Siguiente →</Button>
       </div>
     </div>
   )

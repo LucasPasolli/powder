@@ -1,23 +1,20 @@
 // src/components/facturas/PanelFiltros.jsx
-// Período + filtros (cliente o CUIT, estado) en UN solo nivel visual: sin
-// títulos ni contenedores anidados, los campos y las acciones son hermanos.
-//   · desktop (> 1024)  → una fila flexible: si no entra (sidebar abierto), las acciones pasan a una 2.ª fila.
-//   · tablet (768–1024) → barra con el período y dos acciones; los filtros se
-//                          editan en un panel a pantalla completa (sin cambios).
-//   · mobile (< 768)    → cuadrante inline, una sola columna lógica:
-//                          Cliente o CUIT → Desde / Hasta → Estado → acciones.
-//                          Controles de 44 px y texto de 16 px (evita el zoom
-//                          automático de iOS); sin scroll horizontal.
-// El borrador vive acá y se compromete sólo con "Ver período"/"Ver resultados"
-// o Enter: no se dispara una consulta por cada tecla.
-import { useEffect, useId, useState } from 'react'
-import { AlertCircle, Calendar, Eye, RefreshCw, SlidersHorizontal } from 'lucide-react'
-import { Badge, Button, Card, Input, Select } from '../ui'
-import FullScreenSheet from '../ui/FullScreenSheet'
+// Período + filtros (cliente o CUIT, estado).
+//   · desktop (> 1024)     → una fila flexible con borrador; se confirma con "Ver período" o Enter
+//                            (sin cambios).
+//   · mobile/tablet (≤ 1024) → patrón único del sistema (<FiltrosMovil>): "Cliente o CUIT" queda
+//                            como buscador siempre visible (se aplica al escribir: es un filtro
+//                            local, no dispara consulta) y Desde / Hasta / Estado van al panel,
+//                            donde "Aplicar" consulta el período. Debajo de la fila se muestra
+//                            el período vigente y "Actualizar".
+import { useEffect, useState } from 'react'
+import { AlertCircle, Calendar, Eye, RefreshCw } from 'lucide-react'
+import { Button, Card, Input, Select } from '../ui'
 import DateField from '../ui/DateField'
+import FiltrosMovil, { BuscadorListado, mensajeRangoInvalido } from '../ui/FiltrosMovil'
 import useBreakpoint from '../../hooks/useBreakpoint'
 import {
-  ESTADO_OPCIONES, FILTROS_VACIOS, contarFiltros, describirFiltros, firstOfMonth, fmtFecha, today,
+  ESTADO_OPCIONES, FILTROS_VACIOS, firstOfMonth, fmtFecha, today,
 } from '../../lib/facturas'
 import { TOQUE } from './estilos'
 
@@ -31,24 +28,12 @@ function Alerta({ children, className = '' }) {
   )
 }
 
-/**
- * Los cuatro campos, como hermanos directos del contenedor (fragmento).
- * @param {'fila'|'hoja'|'movil'} variante
- *   fila  → desktop: orden Cliente, Desde, Hasta, Estado en una fila flexible.
- *   hoja  → panel táctil de tablet: orden original, cliente y estado a ancho completo.
- *   movil → inline en mobile: Cliente, Desde, Hasta y Estado a ancho completo
- *           (mismo margen y ancho que el buscador; DateField no entra en media columna a 320 px).
- */
-function Campos({ b, set, variante = 'fila' }) {
-  const tactil = variante !== 'fila'
-  const movil  = variante === 'movil'
-  const alto   = tactil ? 'min-h-[44px]' : ''
-  const base   = movil ? `${alto} w-full min-w-0 text-base` : alto
-
+/** Los cuatro campos de ESCRITORIO, como hermanos directos del contenedor (fragmento). */
+function Campos({ b, set }) {
   const cliente = (
     <Input label="Cliente o CUIT" type="text" inputMode="search" enterKeyHint="search" autoComplete="off"
       maxLength={60} placeholder="Nombre, apellido o CUIT" value={b.cliente}
-      onChange={(e) => set({ cliente: e.target.value })} className={base} />
+      onChange={(e) => set({ cliente: e.target.value })} />
   )
   // El período es obligatorio: sin botón "Borrar" (clearable=false) para no dejar un rango vacío.
   const desde = (
@@ -58,44 +43,18 @@ function Campos({ b, set, variante = 'fila' }) {
     <DateField label="Hasta" value={b.hasta} onChange={(v) => set({ hasta: v })} clearable={false} required />
   )
   const estado = (
-    <Select label="Estado" value={b.estado} onChange={(e) => set({ estado: e.target.value })} className={base}>
+    <Select label="Estado" value={b.estado} onChange={(e) => set({ estado: e.target.value })}>
       {ESTADO_OPCIONES.map((o) => <option key={o.valor} value={o.valor}>{o.label}</option>)}
     </Select>
   )
-
-  if (movil) {
-    // Cada campo vive en su propia celda de la grilla (min-w-0 evita que un
-    // <input type="date"> fuerce desborde). La etiqueta del buscador no se parte.
-    return (
-      <>
-        <div className="col-span-2 min-w-0 [&_label]:whitespace-nowrap">{cliente}</div>
-        <div className="col-span-2 min-w-0">{desde}</div>
-        <div className="col-span-2 min-w-0">{hasta}</div>
-        <div className="col-span-2 min-w-0">{estado}</div>
-      </>
-    )
-  }
-
-  if (variante === 'fila') {
-    // Fila flexible: Cliente nunca baja de 14rem (etiqueta en una línea, sin que
-    // Estado se le superponga). Si no entra todo, las acciones pasan a la 2.ª fila.
-    return (
-      <>
-        <div className="flex-1 min-w-[14rem] [&_label]:whitespace-nowrap">{cliente}</div>
-        <div className="w-[12rem] shrink-0">{desde}</div>
-        <div className="w-[12rem] shrink-0">{hasta}</div>
-        <div className="w-[11rem] shrink-0">{estado}</div>
-      </>
-    )
-  }
-
-  // hoja (tablet)
+  // Fila flexible: Cliente nunca baja de 14rem (etiqueta en una línea, sin que Estado se le
+  // superponga). Si no entra todo, las acciones pasan a la 2.ª fila.
   return (
     <>
-      {desde}
-      {hasta}
-      <div className="col-span-2 [&_label]:whitespace-nowrap">{cliente}</div>
-      <div className="col-span-2">{estado}</div>
+      <div className="flex-1 min-w-[14rem] [&_label]:whitespace-nowrap">{cliente}</div>
+      <div className="w-[12rem] shrink-0">{desde}</div>
+      <div className="w-[12rem] shrink-0">{hasta}</div>
+      <div className="w-[11rem] shrink-0">{estado}</div>
     </>
   )
 }
@@ -111,103 +70,74 @@ function Campos({ b, set, variante = 'fila' }) {
  *   Devuelve `true` si se aplicó (el panel se cierra) o `false` si hubo error (queda abierto).
  * @param {() => Promise<unknown>} props.onActualizar  Vuelve a consultar el período vigente.
  */
-export default function PanelFiltros({ desde, hasta, filtros, cargando, error, onAplicar, onActualizar }) {
-  const { isMobile, isCompact } = useBreakpoint()
-  const formId = useId()
+export default function PanelFiltros({ desde, hasta, filtros, cargando, error, onAplicar, onActualizar, onCliente }) {
+  const { isCompact } = useBreakpoint()
   const aplicado = { desde, hasta, ...filtros }
-  const [b, setB]             = useState(aplicado)
-  const [abierto, setAbierto] = useState(false)
+  const [b, setB] = useState(aplicado)
 
   // Si el padre cambia lo aplicado (p. ej. "Limpiar filtros" del listado vacío), el borrador lo sigue.
   useEffect(() => { setB({ desde, hasta, ...filtros }) }, [desde, hasta, filtros])
 
   const set     = (parcial) => setB((prev) => ({ ...prev, ...parcial }))
   const limpiar = () => set({ ...FILTROS_VACIOS })
-  // Mobile: "Limpiar" devuelve TODOS los campos a su valor por defecto (mes en curso + sin filtros).
-  const limpiarTodo = () => setB({ desde: firstOfMonth(), hasta: today(), ...FILTROS_VACIOS })
-  const abrir   = () => { setB(aplicado); setAbierto(true) }
 
   async function enviar(e) {
     e.preventDefault()
     const { desde: d, hasta: h, ...f } = b
-    const ok = await onAplicar({ desde: d, hasta: h, filtros: f })
-    if (ok) setAbierto(false)
+    await onAplicar({ desde: d, hasta: h, filtros: f })
   }
 
-  // ── Mobile: cuadrante inline, orden Cliente → Desde → Hasta → Estado → acciones ──
-  if (isMobile) {
+  // ── Mobile / tablet: patrón único de filtros ──
+  if (isCompact) {
     return (
-      <Card className="p-3">
-        <form onSubmit={enviar} noValidate aria-label="Filtros de facturas" className="grid grid-cols-2 gap-3">
-          <Campos b={b} set={set} variante="movil" />
-          {error && <Alerta className="col-span-2">{error}</Alerta>}
-          <div className="col-span-2 grid grid-cols-2 gap-2">
-            <Button type="button" variant="secondary" className={TOQUE} onClick={limpiarTodo}>Limpiar</Button>
-            <Button type="submit" icon={Eye} className={TOQUE} loading={cargando}>
-              {cargando ? 'Cargando…' : 'Ver período'}
+      <FiltrosMovil
+        busqueda={(
+          <BuscadorListado value={filtros.cliente} onChange={(cliente) => onCliente?.(cliente)}
+            placeholder="Cliente o CUIT" etiqueta="Cliente o CUIT" maxLength={60} />
+        )}
+        value={{ desde, hasta, estado: filtros.estado }}
+        defaults={{ desde: firstOfMonth(), hasta: today(), estado: FILTROS_VACIOS.estado }}
+        campos={[
+          // El período es obligatorio: sin «Borrar».
+          { tipo: 'fecha', clave: 'desde', etiqueta: 'Desde', limpiable: false, max: (x) => x.hasta || undefined },
+          { tipo: 'fecha', clave: 'hasta', etiqueta: 'Hasta', limpiable: false, min: (x) => x.desde || undefined },
+          { tipo: 'select', clave: 'estado', etiqueta: 'Estado',
+            opciones: ESTADO_OPCIONES.map((o) => ({ value: o.valor, label: o.label })) },
+        ]}
+        validar={(x) => mensajeRangoInvalido(x.desde, x.hasta)}
+        // Devuelve la promesa: «Aplicar» muestra «cargando» y el panel sólo se cierra si la consulta salió bien.
+        onApply={(x) => onAplicar({
+          desde: x.desde, hasta: x.hasta, filtros: { cliente: filtros.cliente, estado: x.estado },
+        })}
+        error={error}
+        debajo={(
+          <div className="flex items-center justify-between gap-3">
+            <p className="flex items-center gap-2 text-surface-100 text-sm font-mono tabular-nums min-w-0">
+              <Calendar size={15} className="text-brand-500 flex-shrink-0" aria-hidden="true" />
+              <span className="sr-only">Período: </span>{fmtFecha(desde)} al {fmtFecha(hasta)}
+            </p>
+            <Button variant="secondary" icon={RefreshCw} className={TOQUE} loading={cargando} onClick={onActualizar}>
+              Actualizar
             </Button>
           </div>
-        </form>
-      </Card>
+        )}
+      />
     )
   }
 
   // ── Desktop: una fila, todo hermano ──
-  if (!isCompact) {
-    return (
-      <Card className="p-4">
-        <form onSubmit={enviar} noValidate className="flex flex-wrap items-end gap-3">
-          <Campos b={b} set={set} variante="fila" />
-          <div className="ml-auto flex items-center gap-3 shrink-0">
-            <Button type="button" variant="ghost" className="whitespace-nowrap" onClick={limpiar}>Limpiar</Button>
-            <Button type="submit" icon={Eye} className="whitespace-nowrap" loading={cargando}>
-              {cargando ? 'Cargando…' : 'Ver período'}
-            </Button>
-          </div>
-          {error && <Alerta className="basis-full">{error}</Alerta>}
-        </form>
-      </Card>
-    )
-  }
-
-  // ── Tablet: barra única + panel a pantalla completa (sin cambios) ──
-  const activos = describirFiltros(filtros)
-  const n = contarFiltros(filtros)
   return (
-    <>
-      <Card className="p-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-        <p className="flex items-center gap-2 text-surface-100 text-base font-mono tabular-nums">
-          <Calendar size={16} className="text-brand-500 flex-shrink-0" aria-hidden="true" />
-          <span className="sr-only">Período: </span>{fmtFecha(desde)} al {fmtFecha(hasta)}
-        </p>
-        <div className="flex gap-2">
-          <Button variant="secondary" icon={RefreshCw} className={TOQUE} loading={cargando} onClick={onActualizar}>
-            Actualizar
-          </Button>
-          <Button icon={SlidersHorizontal} className={TOQUE} onClick={abrir} aria-haspopup="dialog">
-            Filtros{n > 0 ? ` (${n})` : ''}
+    <Card className="p-4">
+      <form onSubmit={enviar} noValidate className="flex flex-wrap items-end gap-3">
+        <Campos b={b} set={set} />
+        <div className="ml-auto flex items-center gap-3 shrink-0">
+          <Button type="button" variant="ghost" className="whitespace-nowrap" onClick={limpiar}>Limpiar</Button>
+          <Button type="submit" icon={Eye} className="whitespace-nowrap" loading={cargando}>
+            {cargando ? 'Cargando…' : 'Ver período'}
           </Button>
         </div>
-        {activos.length > 0 && (
-          <ul className="flex flex-wrap gap-2 basis-full" aria-label="Filtros activos">
-            {activos.map((a) => <li key={a}><Badge color="gray">{a}</Badge></li>)}
-          </ul>
-        )}
-        {error && !abierto && <Alerta className="basis-full">{error}</Alerta>}
-      </Card>
-
-      <FullScreenSheet open={abierto} onClose={() => setAbierto(false)} title="Filtros"
-        footer={
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="secondary" className={TOQUE} onClick={limpiar}>Limpiar</Button>
-            <Button type="submit" form={formId} className={TOQUE} loading={cargando}>Ver resultados</Button>
-          </div>
-        }>
-        <form id={formId} onSubmit={enviar} noValidate className="grid grid-cols-2 gap-3">
-          <Campos b={b} set={set} variante="hoja" />
-          {error && <Alerta className="col-span-2">{error}</Alerta>}
-        </form>
-      </FullScreenSheet>
-    </>
+        {error && <Alerta className="basis-full">{error}</Alerta>}
+      </form>
+    </Card>
   )
 }

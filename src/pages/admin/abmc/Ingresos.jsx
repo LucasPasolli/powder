@@ -7,6 +7,8 @@ import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { obtenerIngresos, crearIngreso, actualizarIngreso, eliminarIngreso } from '../../../services/movimientosService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, cap, normalizarTexto, Pagination, ConfirmModal, dropdownClass } from './comunes'
+import { FiltrosGestionMovil, opcionesTodas } from './comunes'
+import { useBreakpoint } from '../../../hooks/useBreakpoint'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INGRESOS
@@ -23,6 +25,7 @@ export default function Ingresos() {
   const [confirm, setConfirm] = useState(null)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const { isCompact } = useBreakpoint()
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filtCat, setFiltCat] = useState('')
@@ -87,6 +90,17 @@ export default function Ingresos() {
 
   return (
     <div className="space-y-4">
+      {/* Mobile/tablet (≤ 1024px): patrón único de filtros (buscador + botón «Filtros» + panel).
+          Desktop: barra inline original, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosGestionMovil
+          search={search} onSearch={setSearch} placeholder="Buscar por ID o descripción…"
+          valores={{ desde: dateFrom, hasta: dateTo, categoria: filtCat }}
+          onApply={(b) => { setDateFrom(b.desde); setDateTo(b.hasta); setFiltCat(b.categoria) }}
+          selects={[{ clave: 'categoria', etiqueta: 'Categoría', opciones: opcionesTodas(CATEGORIAS_INGRESO, 'Todas') }]}
+          acciones={<Button icon={Plus} onClick={openCreate}>Nuevo ingreso</Button>}
+        />
+      ) : (
       <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center w-full">
         <div className="flex-1 min-w-[160px]">
           <input
@@ -107,6 +121,7 @@ export default function Ingresos() {
         </div>
         <Button icon={Plus} onClick={openCreate}>Nuevo ingreso</Button>
       </div>
+      )}
 
       <div ref={tableAnchorRef}>
       <Card>

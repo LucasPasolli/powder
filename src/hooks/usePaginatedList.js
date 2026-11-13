@@ -1,5 +1,5 @@
 // src/hooks/usePaginatedList.js
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 
 /**
  * usePaginatedList
@@ -18,7 +18,13 @@ import { useState, useEffect, useCallback, useRef } from 'react'
  *   - Si tras una recarga `page` queda fuera de rango (se eliminó el
  *     último registro de la última página, un filtro redujo el resultado,
  *     etc.) se ajusta automáticamente al máximo válido en vez de dejar la
- *     tabla vacía.
+ *     tabla vacía. Ese ajuste NO corre mientras se está cargando: con los
+ *     datos todavía vacíos `totalPages` vale 1 y pisaría la página
+ *     restaurada (ver `initialPage`).
+ *   - `initialPage` permite ARRANCAR en una página distinta de la 1 (p. ej.
+ *     al volver a una pantalla cuya vista se guardó). El reset a la página 1
+ *     solo ocurre cuando los filtros CAMBIAN de verdad respecto del render
+ *     anterior, no al montar.
  *
  * Soporta los dos esquemas de paginación que conviven en el proyecto:
  *
@@ -51,6 +57,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
  * @param {(a:any, b:any, clientFilters:object) => number} [opts.sort]
  *   Comparador de orden en memoria.
  * @param {number}          [opts.pageSize=50]
+ * @param {number}          [opts.initialPage=1]  Página inicial (se ajusta al rango válido al terminar de cargar).
  * @param {'client'|'server'} [opts.mode='client']
  *
  * @returns {{
@@ -78,11 +85,12 @@ export function usePaginatedList({
   sort,
   pageSize = 50,
   mode = 'client',
+  initialPage = 1,
 } = {}) {
   const [rawItems, setRawItems] = useState([])  // mode client: data cruda del fetcher
-  const [items,    setItems]    = useState([])  // mode client: rawItems + clientFilter + sort
+  const [serverItems, setServerItems] = useState([]) // mode server: página devuelta por el backend
   const [count,    setCount]    = useState(0)    // mode server: total reportado por el backend
-  const [page,     setPage]     = useState(1)
+  const [page,     setPage]     = useState(initialPage)
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
 
@@ -108,7 +116,7 @@ export function usePaginatedList({
       if (mode === 'server') {
         const { data, count: total } = await fetcherRef.current({ ...serverFilters, page, pageSize })
         if (reqId !== reqIdRef.current) return
-        setItems(data)
+        setServerItems(data)
         setCount(total ?? data.length)
       } else {
         const data = await fetcherRef.current(serverFilters)
@@ -136,19 +144,29 @@ export function usePaginatedList({
   // registro. Esta es la corrección central: antes, el propio `load()`
   // reseteaba `page`, así que guardar un registro en la página 3 volvía a
   // la página 1.
+  //
+  // Se compara contra la clave del render anterior (y no se resetea "siempre
+  // que corra el efecto") para que montar con `initialPage` > 1 no la pise:
+  // tampoco se resetea en el doble montaje de StrictMode.
+  const clavesPrevRef = useRef(`${serverKey}|${clientKey}`)
   useEffect(() => {
+    const claves = `${serverKey}|${clientKey}`
+    if (clavesPrevRef.current === claves) return
+    clavesPrevRef.current = claves
     setPage(1)
   }, [serverKey, clientKey])
 
-  // mode 'client': aplica filtro + orden en memoria sobre la data cruda.
-  useEffect(() => {
-    if (mode !== 'client') return
+  // mode 'client': aplica filtro + orden en memoria sobre la data cruda. Se DERIVA con useMemo (y no
+  // con un efecto + estado): así `items` es coherente en el MISMO render en que llegan los datos, sin
+  // un render intermedio con la lista vacía que haría "saltar" la página restaurada a la 1.
+  const items = useMemo(() => {
+    if (mode !== 'client') return serverItems
     let result = [...rawItems]
     if (clientFilterRef.current) result = result.filter((item) => clientFilterRef.current(item, clientFilters))
     if (sortRef.current) result = result.sort((a, b) => sortRef.current(a, b, clientFilters))
-    setItems(result)
+    return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawItems, clientKey, mode])
+  }, [mode, serverItems, rawItems, clientKey])
 
   const totalCount = mode === 'server' ? count : items.length
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
@@ -156,9 +174,12 @@ export function usePaginatedList({
   // Salvaguarda: si la página actual queda fuera de rango tras una
   // recarga o un cambio de filtro que redujo el resultado, la ajustamos al
   // máximo válido en vez de dejar la tabla vacía.
+  // Mientras carga (o si falló) `items` puede estar vacío por falta de datos, no por un filtro:
+  // ajustar ahí perdería la página del usuario.
   useEffect(() => {
+    if (loading || error) return
     setPage((p) => Math.min(p, totalPages))
-  }, [totalPages])
+  }, [totalPages, loading, error])
 
   const pageItems = mode === 'server'
     ? items

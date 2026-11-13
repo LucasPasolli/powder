@@ -10,12 +10,28 @@ import { useMontosPendientes, useOnlineStatus } from '../../../hooks/useMontosPe
 import { useAsyncAction } from '../../../hooks/useAsyncAction'
 import { useDebounce } from '../../../hooks/useDebounce'
 import { Pagination, ConfirmModal, InfoBanner } from './comunes'
+import FiltrosMovil, { BuscadorListado } from '../../../components/ui/FiltrosMovil'
+import { useBreakpoint } from '../../../hooks/useBreakpoint'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DEBE / HABER
 // Alta desde el ABMC de clientes (DebeHaberModal) + listado de pendientes con
 // confirmación irreversible (panel DebeHaber).
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Panel de filtros mobile/tablet: valores por defecto = los del hook (Pendientes, todos los tipos, más recientes).
+const DEFAULTS_FILTROS_MOVIL = Object.freeze({ estado: 'pendiente', tipo: '', orden: 'desc' })
+const CAMPOS_FILTROS_MOVIL = [
+  { tipo: 'select', clave: 'estado', etiqueta: 'Estado', opciones: [
+    { value: 'pendiente', label: 'Pendientes' }, { value: 'confirmado', label: 'Confirmados' }, { value: '', label: 'Todos' },
+  ] },
+  { tipo: 'select', clave: 'tipo', etiqueta: 'Tipo', opciones: [
+    { value: '', label: 'Todos' }, { value: 'debe', label: 'Debe' }, { value: 'haber', label: 'Haber' },
+  ] },
+  { tipo: 'select', clave: 'orden', etiqueta: 'Ordenar por fecha', opciones: [
+    { value: 'desc', label: 'Más recientes' }, { value: 'asc', label: 'Más antiguos' },
+  ] },
+]
 
 const TIPO_META = {
   debe:  { label: 'Debe',  color: 'red',   hint: 'El cliente adeuda este monto (a cobrar)' },
@@ -248,6 +264,7 @@ export default function DebeHaber() {
     rows, total, page, pageSize, loading, error, estado, tipo, orden, busqueda, hayFiltros,
     setPage, setEstado, setTipo, setOrden, setBusqueda, limpiarFiltros, refetch,
   } = useMontosPendientes()
+  const { isCompact } = useBreakpoint()
   const online = useOnlineStatus()
   const { anchorRef: tableAnchorRef, scrollToStart } = useScrollAnchor()
   const [target, setTarget] = useState(null)
@@ -399,6 +416,23 @@ export default function DebeHaber() {
       <SuccessBanner message={flash} onClose={clearFlash} />
       {!online && <InfoBanner message="Sin conexión: no se pueden confirmar movimientos hasta reconectar." />}
 
+      {/* Mobile/tablet (≤ 1024px): patrón único de filtros (buscador + botón «Filtros» + panel).
+          Desktop: barra inline original, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <div className="space-y-2">
+          <FiltrosMovil
+            busqueda={(
+              <BuscadorListado id="dh-buscar" value={busqueda} onChange={setBusqueda}
+                placeholder="Buscar cliente por ID, nombre, apellido o apodo…" etiqueta="Buscar cliente" />
+            )}
+            value={{ estado, tipo, orden }}
+            defaults={DEFAULTS_FILTROS_MOVIL}
+            campos={CAMPOS_FILTROS_MOVIL}
+            onApply={(b) => { setEstado(b.estado); setTipo(b.tipo); setOrden(b.orden) }}
+          />
+          <Button icon={Plus} className="w-full justify-center" onClick={() => setModal({ open: true, row: null })}>Nuevo Debe/Haber</Button>
+        </div>
+      ) : (
       <div className="flex flex-col lg:flex-row gap-2 lg:items-center w-full">
         <div className="flex-1">
           <label htmlFor="dh-buscar" className="sr-only">Buscar cliente</label>
@@ -432,6 +466,7 @@ export default function DebeHaber() {
         </div>
         <Button icon={Plus} onClick={() => setModal({ open: true, row: null })}>Nuevo Debe/Haber</Button>
       </div>
+      )}
 
       <div ref={tableAnchorRef}>
         <Card>

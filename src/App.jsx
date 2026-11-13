@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { useAuth }        from './lib/AuthContext'
 import { buildLoginUrl }  from './lib/safeRedirect'
 import AppShell           from './components/layout/AppShell'
+import ScrollToTopOnNavigate from './components/layout/ScrollToTopOnNavigate'
 import SpecialAuthGate    from './components/auth/SpecialAuthGate'
 import Login              from './pages/Login'
 import Dashboard          from './pages/Dashboard'
@@ -68,6 +69,8 @@ function RequireSpecialAuth({ pageKey, label, children }) {
 export default function App() {
   return (
     <BrowserRouter>
+      {/* Mobile/tablet: cada cambio de ruta (o "Atrás") arranca desde el inicio. No-op en desktop. */}
+      <ScrollToTopOnNavigate />
       <Routes>
         <Route path="/login"          element={<Login />} />
         <Route path="/"               element={<RequireAuth><Dashboard /></RequireAuth>} />

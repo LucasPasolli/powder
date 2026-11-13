@@ -113,7 +113,8 @@ export default function Facturas() {
       )}
 
       <PanelFiltros desde={periodo.desde} hasta={periodo.hasta} filtros={filtros}
-        cargando={cargando} error={error} onAplicar={aplicar} onActualizar={actualizar} />
+        cargando={cargando} error={error} onAplicar={aplicar} onActualizar={actualizar}
+        onCliente={(cliente) => setFiltros((f) => ({ ...f, cliente }))} />
 
       {!datos && cargando && (
         <div className="flex justify-center py-10"><Spinner label="Cargando comprobantes" /></div>

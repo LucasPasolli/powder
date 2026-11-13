@@ -1,5 +1,5 @@
 // src/pages/Presupuestador.jsx
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 
@@ -12,7 +12,7 @@ import { obtenerPresupuestoPorId, obtenerDetallesDePresupuesto } from '../servic
 // y sin validar el total en el servidor). Ahora es atómica y usa la misma validación.
 import { crearPresupuestoIdempotente, actualizarPresupuestoIdempotente } from '../services/presupuestosIdempotente'
 import { useClaveIdempotencia } from '../lib/idempotency'
-import { buscarProductos, obtenerProductoPorId, obtenerMedidasDeProducto } from '../services/productosService'
+import { obtenerProductoPorId, obtenerMedidasDeProducto } from '../services/productosService'
 import { calcularPromocionParaItem, obtenerPromocionesVigentes } from '../services/promocionesService'
 // [FIX Ajuste vs Promo] Regla única: el ajuste por método de pago NO se aplica a ítems con promoción.
 import { calcularTotales, derivarFactorAjustable, factorCompatibleRpc } from '../lib/calculoPresupuesto'
@@ -24,10 +24,21 @@ import { useDebounce } from '../hooks/useDebounce'
 import { useBorradorAutoguardado } from '../hooks/useBorradorAutoguardado'
 import { leerBorrador, reconciliarConCatalogo } from '../lib/borradorPresupuesto'
 import BorradorBanner from '../components/presupuestos/BorradorBanner'
+// [MOBILE/TABLET] Layout responsive del módulo (ver hooks/useBreakpoint.js: mobile < 768,
+// tablet 768–1024, desktop ≥ 1025). Todo lo nuevo es VISUAL: el cálculo, las validaciones y los
+// datos enviados son los mismos en cualquier dispositivo.
+import { useBreakpoint } from '../hooks/useBreakpoint'
+import { useOnlineStatus } from '../hooks/useOnlineStatus'
+import { useTecladoVirtual } from '../hooks/useTecladoVirtual'
+import { useDropdownAnclado } from '../hooks/useDropdownAnclado'
+import { aplicarSignoPct, esRecargoPct } from '../lib/pctExcepcion'
+import BarraAccionesMovil from '../components/presupuestos/BarraAccionesMovil'
+// [BUSCADORES] Carga de ítems con dos buscadores independientes (nombre / ID).
+import BuscadorProductos from '../components/presupuestos/BuscadorProductos'
 
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Button, Card, PageHeader, Modal, Input } from '../components/ui'
-import { Plus, Trash2, Search, UserPlus, CheckCircle2, AlertCircle, Download, FileText, ArrowLeft, X, Tag } from 'lucide-react'
+import { Trash2, Search, UserPlus, CheckCircle2, AlertCircle, Download, FileText, ArrowLeft, X, Tag } from 'lucide-react'
 
 // ─── Constantes ────────────────────────────────────────────────────────────
 
@@ -39,6 +50,13 @@ const METODOS_BASE = [
   { value: 'cc15',          label: 'Cta. Cte. 15 días', factor: 1.00,  texto: 'Precio de lista' },
   { value: 'cc30',          label: 'Cta. Cte. 30 días', factor: 1.105, texto: '10.5% recargo' },
 ]
+
+// [MOBILE/TABLET] Clases de las líneas del resumen de montos. La etiqueta y el importe comparten
+// fila; si no entran, el importe baja a su propia línea y queda alineado a la DERECHA (no hay
+// desborde con importes enormes ni etiquetas largas). Desde 1025 px es la fila original
+// (`flex justify-between gap-12`, sin wrap).
+const FILA_MONTO = 'flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 min-[1025px]:flex-nowrap min-[1025px]:gap-12'
+const VALOR_MONTO = 'ml-auto whitespace-nowrap text-right'
 
 // Fecha de HOY en hora LOCAL (YYYY-MM-DD). `toISOString()` devuelve la fecha en UTC:
 // en Argentina, después de las 21:00 daría el día siguiente y el presupuesto
@@ -72,11 +90,16 @@ function Toast({ message, onDone }) {
     return () => clearTimeout(t)
   }, [onDone])
   return createPortal(
-    <div className="fixed top-5 right-5 z-[9999] pointer-events-none">
-      <div className="flex items-center gap-3 bg-emerald-900/95 border border-emerald-500/50
-                      rounded-2xl px-5 py-3 shadow-2xl animate-slide-up">
-        <CheckCircle2 size={18} className="text-emerald-400 flex-shrink-0" />
-        <span className="text-emerald-100 text-sm font-body">{message}</span>
+    // [MOBILE] En celular ocupa el ancho útil y se ubica DEBAJO de la barra superior fija (56 px);
+    // antes `top-5 right-5` lo montaba sobre ella. Desde `md` (sin barra superior) vuelve a la
+    // esquina original.
+    <div className="fixed z-[9999] pointer-events-none left-4 right-4 top-[calc(env(safe-area-inset-top)+4.25rem)]
+                    md:left-auto md:right-5 md:top-5 md:max-w-sm">
+      <div role="status" aria-live="polite"
+           className="flex items-center gap-3 bg-emerald-900/95 border border-emerald-500/50
+                      rounded-2xl px-4 md:px-5 py-3 shadow-2xl animate-slide-up">
+        <CheckCircle2 size={18} className="text-emerald-400 flex-shrink-0" aria-hidden="true" />
+        <span className="min-w-0 break-words text-emerald-100 text-sm font-body">{message}</span>
       </div>
     </div>,
     document.body
@@ -98,7 +121,7 @@ function PresupuestadorSkeleton() {
         <div className={`h-4 w-36 ${p}`} />
       </div>
       {/* Card cabecera */}
-      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 space-y-5">
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-4 sm:p-6 space-y-5">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className={`md:col-span-2 h-10 ${p}`} />
           <div className={`h-10 ${p}`} />
@@ -109,25 +132,27 @@ function PresupuestadorSkeleton() {
       </div>
       {/* Card tabla */}
       <div className="bg-surface-800 border border-surface-700 rounded-2xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-surface-700 flex justify-between items-center">
+        <div className="px-4 sm:px-6 py-4 border-b border-surface-700 flex justify-between items-center">
           <div className={`h-5 w-20 ${p}`} />
           <div className={`h-8 w-28 ${p}`} />
         </div>
         {[...Array(3)].map((_, i) => (
-          <div key={i} className="px-6 py-3 border-b border-surface-700/50 flex gap-4 items-center">
+          // [MOBILE] Siete bloques de ancho fijo sumaban ~620 px y desbordaban en un celular:
+          // en ≤ 1024 px sólo se muestran los tres primeros.
+          <div key={i} className="px-4 sm:px-6 py-3 border-b border-surface-700/50 flex gap-4 items-center">
             <div className={`h-8 w-6 ${p}`} />
             <div className={`h-8 w-14 ${p}`} />
             <div className={`h-8 flex-1 ${p}`} />
-            <div className={`h-8 w-20 ${p}`} />
-            <div className={`h-8 w-24 ${p}`} />
-            <div className={`h-8 w-28 ${p}`} />
-            <div className={`h-8 w-28 ${p}`} />
+            <div className={`hidden min-[1025px]:block h-8 w-20 ${p}`} />
+            <div className={`hidden min-[1025px]:block h-8 w-24 ${p}`} />
+            <div className={`hidden min-[1025px]:block h-8 w-28 ${p}`} />
+            <div className={`hidden min-[1025px]:block h-8 w-28 ${p}`} />
           </div>
         ))}
       </div>
       {/* Card totales */}
-      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-6 space-y-3">
-        <div className={`h-4 w-64 ${p}`} />
+      <div className="bg-surface-800 border border-surface-700 rounded-2xl p-4 sm:p-6 space-y-3">
+        <div className={`h-4 w-64 max-w-full ${p}`} />
         <div className={`h-4 w-48 ${p}`} />
         <div className={`h-px w-full bg-surface-700`} />
         <div className={`h-6 w-56 ${p}`} />
@@ -192,29 +217,29 @@ function NuevoClienteModal({ open, onClose, onCreated }) {
     <Modal open={open} onClose={onClose} title="Nuevo Cliente">
       <div className="space-y-4">
         {errors.general && (
-          <div className="text-red-400 text-xs bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
+          <div role="alert" className="text-red-400 text-sm min-[1025px]:text-xs break-words bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
             {errors.general}
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 min-[480px]:grid-cols-2 gap-3">
           <Input label="Nombre *"   value={form.nombre}   onChange={e => set('nombre', e.target.value)}   error={errors.nombre}   placeholder="Juan" />
           <Input label="Apellido *" value={form.apellido} onChange={e => set('apellido', e.target.value)} error={errors.apellido} placeholder="García" />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 min-[480px]:grid-cols-2 gap-3">
           <Input label="Apodo"          value={form.apodo}         onChange={e => set('apodo', e.target.value)}         placeholder="Apodo o alias" />
           <Input label="Nombre comercio" value={form.nombreComercio} onChange={e => set('nombreComercio', e.target.value)} placeholder="Nombre del local" />
         </div>
         <Input label="CUIT" value={form.cuit} type="tel" inputMode="numeric" pattern="[0-9-]*"
           onChange={e => setField('cuit', e.target.value)} placeholder="20-12345678-9"  />
         <Input label="Domicilio" value={form.domicilio} onChange={e => set('domicilio', e.target.value)} placeholder="Av. Siempreviva 742" />
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 min-[480px]:grid-cols-2 gap-3">
           <Input label="Teléfono" value={form.telefono} type="tel" inputMode="numeric" pattern="[0-9+\-() ]*"
             onChange={e => setField('telefono', e.target.value)} placeholder="3510000000"  />
           <Input label="Email" value={form.mail} onChange={e => set('mail', e.target.value)} placeholder="email@ejemplo.com" />
         </div>
         <div className="flex gap-2 pt-2">
-          <Button variant="secondary" className="flex-1" onClick={onClose} disabled={saving}>Cancelar</Button>
-          <Button className="flex-1" onClick={guardar} disabled={saving}>{saving ? 'Creando…' : 'Crear Cliente'}</Button>
+          <Button variant="secondary" className="flex-1 max-[1024px]:justify-center min-h-[44px] min-[1025px]:min-h-0" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button className="flex-1 max-[1024px]:justify-center min-h-[44px] min-[1025px]:min-h-0" onClick={guardar} disabled={saving}>{saving ? 'Creando…' : 'Crear Cliente'}</Button>
         </div>
       </div>
     </Modal>
@@ -223,7 +248,7 @@ function NuevoClienteModal({ open, onClose, onCreated }) {
 
 // ─── Buscador de clientes ───────────────────────────────────────────────────
 
-function ClienteSelector({ value, onChange, onToast }) {
+function ClienteSelector({ value, onChange, onToast, compacto }) {
   const [search,     setSearch]     = useState('')
   const [results,    setResults]    = useState([])
   const [showDrop,   setShowDrop]   = useState(false)
@@ -231,6 +256,8 @@ function ClienteSelector({ value, onChange, onToast }) {
   // [OPTIMIZACIÓN 6] Indicador visual de búsqueda en curso
   const [searching,  setSearching]  = useState(false)
   const wrapRef = useRef(null)
+  const anclaRef = useRef(null)
+  const inputId = useId()
 
   // [OPTIMIZACIÓN 1] Debounce: el valor debounceado es el que dispara el fetch,
   // no el valor crudo del input. Con 400 ms de delay (el mismo que ya usaba
@@ -238,8 +265,20 @@ function ClienteSelector({ value, onChange, onToast }) {
   // en lugar de 1 por cada carácter.
   const debouncedSearch = useDebounce(search, 400)
 
+  // [MOBILE/TABLET] Los resultados se dibujan en un portal con `position: fixed`, recortados al
+  // ancho de pantalla y a la zona visible (descontando el teclado virtual), abriendo hacia
+  // arriba si abajo no hay lugar. En escritorio se conserva el desplegable absoluto de siempre.
+  const estiloDrop = useDropdownAnclado({
+    abierto: compacto && showDrop && !value,
+    anclaRef,
+    compacto,
+    alturaMaxima: 320,
+  })
+
   useEffect(() => {
-    const handler = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setShowDrop(false) }
+    const handler = e => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target) && !e.target.closest?.('[data-cliente-drop]')) setShowDrop(false)
+    }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
@@ -286,68 +325,93 @@ function ClienteSelector({ value, onChange, onToast }) {
     onToast('Cliente creado correctamente ✓')
   }
 
+  // Mismo contenido en ambos modos (portal fijo en mobile/tablet, absoluto en escritorio).
+  const contenidoResultados = results.length === 0 ? (
+    <div className="px-4 py-3 text-surface-300 text-sm font-body">
+      Sin resultados.{' '}
+      <button onClick={abrirNuevo}
+        className="text-brand-400 underline hover:text-brand-300 inline-flex items-center min-h-[44px]
+                   min-[1025px]:inline-block min-[1025px]:min-h-0">
+        Crear cliente nuevo
+      </button>
+    </div>
+  ) : (
+    results.map(c => (
+      <button key={c.idCliente} onClick={() => seleccionar(c)}
+        className="w-full text-left px-4 py-3 min-[1025px]:py-2.5 hover:bg-surface-700 transition-colors border-b border-surface-700/60 last:border-0">
+        <p className="text-white text-sm font-body break-words">{c.nombre} {c.apellido}</p>
+        <p className="text-surface-400 text-xs font-mono break-words">ID #{c.idCliente} · {c.telefono || ''}</p>
+      </button>
+    ))
+  )
+
   return (
     <div ref={wrapRef} className="relative">
-      <label className="block text-surface-300 text-xs tracking-widest uppercase font-body mb-1">Cliente</label>
+      <label htmlFor={inputId} className="block text-surface-300 text-sm min-[1025px]:text-xs tracking-widest uppercase font-body mb-1">Cliente</label>
 
       {value ? (
         <div className="flex items-center gap-3 bg-surface-700 border border-brand-500/40 rounded-xl px-4 py-2.5">
-          <div className="flex-1">
-            <p className="text-white text-sm font-body">{value.nombre} {value.apellido}</p>
-            <p className="text-surface-400 text-xs font-mono">ID #{value.idCliente} · {value.mail || 'Sin mail'}</p>
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-body break-words">{value.nombre} {value.apellido}</p>
+            <p className="text-surface-400 text-xs font-mono break-words">ID #{value.idCliente} · {value.mail || 'Sin mail'}</p>
           </div>
-          <button onClick={limpiar} className="text-surface-400 hover:text-red-400 transition-colors text-xl leading-none">×</button>
+          {/* [MOBILE] La × medía ~12 px: ahora el área táctil es de 44×44 (en escritorio, igual que antes). */}
+          <button onClick={limpiar} aria-label="Quitar cliente seleccionado"
+            className="flex items-center justify-center -my-2 -mr-3 min-h-[44px] min-w-[44px]
+                       min-[1025px]:block min-[1025px]:m-0 min-[1025px]:min-h-0 min-[1025px]:min-w-0
+                       text-surface-400 hover:text-red-400 transition-colors text-xl leading-none">×</button>
         </div>
       ) : (
         <>
-          <div className="relative">
-            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
+          <div ref={anclaRef} className="relative">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" aria-hidden="true" />
             {/* [OPTIMIZACIÓN 1] onChange actualiza solo estado local — sin fetch directo */}
+            {/* [MOBILE] 16 px en ≤ 1024 px: con menos, iOS hace zoom al enfocar el campo. */}
             <input
+              id={inputId}
               value={search}
               onChange={e => { setSearch(e.target.value) }}
               onFocus={() => search && results.length > 0 && setShowDrop(true)}
               placeholder="Buscá por nombre o ID..."
+              autoComplete="off"
+              enterKeyHint="search"
               className="w-full bg-surface-700 border border-surface-600 rounded-xl pl-9 pr-9 py-2.5
-                         text-white text-sm font-body placeholder-surface-500
+                         text-white text-base min-[1025px]:text-sm font-body placeholder-surface-500
                          focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-all"
             />
             {/* [OPTIMIZACIÓN 6] Spinner mientras la búsqueda está en curso */}
             {searching && (
               <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                <div className="w-3.5 h-3.5 border-2 border-brand-500/30 border-t-brand-400 rounded-full animate-spin" />
+                <div className="w-3.5 h-3.5 border-2 border-brand-500/30 border-t-brand-400 rounded-full animate-spin motion-reduce:animate-none" />
               </div>
             )}
           </div>
 
-          {showDrop && (
+          {/* Anuncia la cantidad de resultados a lectores de pantalla sin moverles el foco. */}
+          <p role="status" className="sr-only">{showDrop ? `${results.length} resultados` : ''}</p>
+
+          {showDrop && (compacto ? (
+            estiloDrop && createPortal(
+              <div data-cliente-drop style={estiloDrop}
+                className="bg-surface-800 border border-surface-600 rounded-xl shadow-2xl overflow-y-auto overscroll-contain">
+                {contenidoResultados}
+              </div>,
+              document.body
+            )
+          ) : (
             <div className="absolute z-[9999] top-full mt-1 w-full bg-surface-800 border border-surface-600
                             rounded-xl shadow-2xl overflow-hidden">
-              {results.length === 0 ? (
-                <div className="px-4 py-3 text-surface-300 text-sm font-body">
-                  Sin resultados.{' '}
-                  <button onClick={abrirNuevo} className="text-brand-400 underline hover:text-brand-300">
-                    Crear cliente nuevo
-                  </button>
-                </div>
-              ) : (
-                results.map(c => (
-                  <button key={c.idCliente} onClick={() => seleccionar(c)}
-                    className="w-full text-left px-4 py-2.5 hover:bg-surface-700 transition-colors border-b border-surface-700/60 last:border-0">
-                    <p className="text-white text-sm font-body">{c.nombre} {c.apellido}</p>
-                    <p className="text-surface-400 text-xs font-mono">ID #{c.idCliente} · {c.telefono || ''}</p>
-                  </button>
-                ))
-              )}
+              {contenidoResultados}
             </div>
-          )}
+          ))}
         </>
       )}
 
       {!value && (
         <button onClick={abrirNuevo}
-          className="mt-1.5 flex items-center gap-1.5 text-xs text-surface-400 hover:text-brand-400 transition-colors font-body">
-          <UserPlus size={12} /> Crear cliente nuevo
+          className="mt-1.5 flex items-center gap-1.5 min-h-[44px] min-[1025px]:min-h-0 text-sm min-[1025px]:text-xs
+                     text-surface-400 hover:text-brand-400 transition-colors font-body">
+          <UserPlus size={12} aria-hidden="true" /> Crear cliente nuevo
         </button>
       )}
 
@@ -362,11 +426,7 @@ function ClienteSelector({ value, onChange, onToast }) {
 // padre (Presupuestador). Cada ItemRow consulta el mismo caché compartido,
 // así que si dos filas tienen el mismo producto, el segundo fetch nunca sale
 // a la red.
-function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearError, onStockError, getProductoCached }) {
-  const [nombreSearch,   setNombreSearch]   = useState(item.nombreProducto || '')
-  const [nombreResults,  setNombreResults]  = useState([])
-  const [showDrop,       setShowDrop]       = useState(false)
-  const [dropPos,        setDropPos]        = useState({ top: 0, left: 0, width: 0 })
+function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearError, onStockError, getProductoCached, compacto = false }) {
   // `medidas`: variantes completas del producto ({ medida, cantidad, ... }),
   // no solo el nombre — se necesita la cantidad para poder distinguir
   // "no hay stock en ninguna medida" de "seleccioná una medida".
@@ -377,19 +437,16 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
   // que "sin stock" desde la perspectiva del presupuestador: no hay nada
   // seleccionable).
   const [usaMedidas,     setUsaMedidas]      = useState(false)
-  const [idError,        setIdError]        = useState('')
   const [stockWarning,   setStockWarning]   = useState('')
-  const [priceWarning,   setPriceWarning]   = useState(false)
   const [tooltipPos,     setTooltipPos]     = useState({ top: 0, left: 0 })
   const [showTooltip,    setShowTooltip]    = useState(false)
-  // [OPTIMIZACIÓN 6] Indicador visual de búsqueda de productos en curso
-  const [searchingProd,  setSearchingProd]  = useState(false)
   const cantRef   = useRef(null)
-  const wrapRef   = useRef(null)
-  const inputRef  = useRef(null)
   const priceRef  = useRef(null)
   const [showPriceTooltip, setShowPriceTooltip] = useState(false)
   const [priceTooltipPos,  setPriceTooltipPos]  = useState({ top: 0, left: 0 })
+
+  // [BUSCADORES] Sin precio definido: se deriva del ítem (antes era un estado que seteaba el picker).
+  const priceWarning = !!item.idProducto && !parseFloat(item.precioUnitario)
 
   // Precio efectivo (con o sin promo)
   const precioEfectivo = itemConPromo?.precioConPromo != null
@@ -397,58 +454,6 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
     : (parseFloat(item.precioUnitario) || 0)
 
   const tienePromo = itemConPromo?.precioConPromo != null
-
-  // [OPTIMIZACIÓN 1] Estado del input de nombre — separado del valor que
-  // dispara el fetch para poder aplicar debounce.
-  const debouncedNombreSearch = useDebounce(nombreSearch, 400)
-
-  useEffect(() => {
-    const handler = e => {
-      if (
-        wrapRef.current && !wrapRef.current.contains(e.target) &&
-        !e.target.closest('[data-producto-drop]')
-      ) setShowDrop(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  useEffect(() => {
-    if (!showDrop || !inputRef.current) return
-    const update = () => {
-      const rect = inputRef.current.getBoundingClientRect()
-      setDropPos({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX, width: Math.max(rect.width, 300) })
-    }
-    update()
-    window.addEventListener('scroll', update, true)
-    window.addEventListener('resize', update)
-    return () => { window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update) }
-  }, [showDrop])
-
-  // [OPTIMIZACIÓN 1] La búsqueda de productos por nombre ahora está debounceada.
-  // Se dispara solo cuando debouncedNombreSearch cambia (el usuario pausa de escribir),
-  // no en cada keystroke. También usa cancel token para ignorar respuestas de
-  // queries anteriores si el usuario sigue escribiendo.
-  useEffect(() => {
-    // Si el producto ya está seleccionado (tiene idProducto), no buscar
-    if (!debouncedNombreSearch.trim() || item.idProducto) {
-      setNombreResults([])
-      setShowDrop(false)
-      setSearchingProd(false)
-      return
-    }
-    let cancelled = false
-    setSearchingProd(true)
-    buscarProductos({ texto: debouncedNombreSearch.trim() })
-      .then(rows => {
-        if (cancelled) return
-        setNombreResults(rows.slice(0, 12))
-        setShowDrop(true)
-      })
-      .catch(() => { if (!cancelled) { setNombreResults([]); setShowDrop(true) } })
-      .finally(() => { if (!cancelled) setSearchingProd(false) })
-    return () => { cancelled = true }
-  }, [debouncedNombreSearch, item.idProducto])
 
   // [OPTIMIZACIÓN 2] Usar caché compartido para cargar medidas. Si el producto
   // ya fue consultado en esta sesión (por checkStock u otro ItemRow), los datos
@@ -469,6 +474,12 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
         } else {
           setMedidas([])
           onUpdate(uid, 'medida', null)
+        }
+        // [BUSCADORES] Ítem recién agregado desde el buscador: avisa de inmediato si el stock no
+        // alcanza para la cantidad 1 (antes lo hacía el picker de la propia fila al elegir).
+        if (item.verificarStock) {
+          onUpdate(uid, 'verificarStock', false)
+          checkStock(item.idProducto, null, item.cantidad)
         }
       })
       .catch(() => { if (!cancelled) { setMedidas([]); setUsaMedidas(false) } })
@@ -514,103 +525,51 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
     }
   }
 
-  // [OPTIMIZACIÓN 1] El handler del input de nombre ya NO dispara búsquedas.
-  // Solo actualiza el estado local y resetea el producto seleccionado si había uno.
-  // El useEffect con debouncedNombreSearch es quien decide cuándo buscar.
-  function handleNombreChange(text) {
-    setNombreSearch(text)
-    onClearError()
-    onUpdate(uid, 'nombreProducto', text)
-    if (item.idProducto) {
-      onUpdate(uid, 'idProducto', '')
-      onUpdate(uid, 'precioUnitario', 0)
-      onUpdate(uid, 'idCategoria', null)
-      onUpdate(uid, 'medida', null)
-      setStockWarning('')
-      onStockError(uid, false)
-      setPriceWarning(false)
-    }
-  }
-
-  function seleccionarProducto(p) {
-    setNombreSearch(p.nombre)
-    setShowDrop(false)
-    onClearError()
-    setIdError('')
-    onUpdate(uid, 'idProducto',     p.idProducto)
-    onUpdate(uid, 'nombreProducto', p.nombre)
-    onUpdate(uid, 'precioUnitario', p.precioUnitario)
-    // [FIX Promo-Categoría] Sin esto, calcularPromocionParaItem siempre recibía
-    // idCategoria = null y las promociones con alcance 'categoria' nunca podían
-    // matchear, sin importar a qué categoría perteneciera el producto elegido.
-    onUpdate(uid, 'idCategoria',    p.idCategoria ?? null)
-    onUpdate(uid, 'medida',         null)
-    setPriceWarning(!p.precioUnitario)
-    checkStock(p.idProducto, null, item.cantidad)
-  }
-
-  async function handleIdChange(val) {
-    const clean = val.replace(/\D/g, '')
-    onClearError()
-    onUpdate(uid, 'idProducto', clean)
-    if (clean) {
-      try {
-        // [OPTIMIZACIÓN 2] Lookup por ID también usa el caché compartido
-        const { producto: p } = await getProductoCached(parseInt(clean))
-        if (p) {
-          setNombreSearch(p.nombre)
-          onUpdate(uid, 'nombreProducto', p.nombre)
-          onUpdate(uid, 'precioUnitario', p.precioUnitario)
-          // [FIX Promo-Categoría] misma corrección que en seleccionarProducto:
-          // el picker por ID es una vía alternativa para elegir producto y
-          // también debía propagar la categoría al ítem.
-          onUpdate(uid, 'idCategoria', p.idCategoria ?? null)
-          onUpdate(uid, 'medida', null)
-          setIdError('')
-          setPriceWarning(!p.precioUnitario)
-          checkStock(p.idProducto, null, item.cantidad)
-        } else {
-          setNombreSearch('')
-          onUpdate(uid, 'nombreProducto', '')
-          onUpdate(uid, 'precioUnitario', 0)
-          onUpdate(uid, 'idCategoria', null)
-          onUpdate(uid, 'medida', null)
-          setIdError(`Sin producto con ID ${clean}`)
-        }
-      } catch {
-        setNombreSearch('')
-        onUpdate(uid, 'nombreProducto', '')
-        onUpdate(uid, 'precioUnitario', 0)
-        onUpdate(uid, 'idCategoria', null)
-        onUpdate(uid, 'medida', null)
-        setIdError(`Sin producto con ID ${clean}`)
-      }
-    } else {
-      setNombreSearch('')
-      onUpdate(uid, 'nombreProducto', '')
-      onUpdate(uid, 'precioUnitario', 0)
-      onUpdate(uid, 'idCategoria', null)
-      onUpdate(uid, 'medida', null)
-      setStockWarning('')
-      onStockError(uid, false)
-      setIdError('')
-      setPriceWarning(false)
-    }
-  }
-
-  const cell = `bg-surface-700 border border-surface-600 rounded-lg px-2 py-1.5 text-white text-sm
+  // ── Presentación ────────────────────────────────────────────────────────────
+  // ≤ 1024 px (mobile/tablet): la fila es una TARJETA (grid de 12 columnas, un único DOM y un
+  //   único estado: no hay una segunda versión del componente que mantener sincronizada).
+  //     mobile  : [Ítem N ........ 🗑]  [Cant. | Nombre]  [ID | Medida]  [Precio]  [Subtotal]   (Precio/Subtotal a ancho
+  //               completo bajo 640 px: un precio de 9 dígitos no entra en media columna)
+  //     tablet  : [Ítem N ........ 🗑]  [Cant. | Nombre ....... | ID | Medida ..]  [Precio | Subtotal]
+  // ≥ 1025 px (escritorio): vuelve a ser <tr>/<td> de tabla con las mismas medidas de antes
+  //   (todas las clases de escritorio se restablecen con el prefijo `min-[1025px]:`).
+  // Misma convención que `ui/Table`: mismo umbral que `useBreakpoint` y que `ALTO_CONTROL`.
+  // El orden del DOM (Cant → Nombre → ID → Medida → Precio → Subtotal → Borrar) es el orden de
+  // tabulación en ambos modos; el botón de borrar sólo se REUBICA visualmente arriba a la derecha.
+  const cell = `bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 min-h-[44px] text-white text-base
                 font-mono focus:outline-none focus:border-brand-500 transition-all
-                [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`
+                [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none
+                min-[1025px]:px-2 min-[1025px]:py-1.5 min-[1025px]:min-h-0 min-[1025px]:text-sm`
+
+  // Etiqueta visible sólo en tarjeta (en tabla la dan los <th>). aria-hidden: cada control ya
+  // tiene su `aria-label` completo, así que el lector de pantalla no lo lee dos veces.
+  const etiqueta = 'mb-1 block text-surface-400 text-xs tracking-widest uppercase font-body min-[1025px]:hidden'
+
+  const claseFila = item.noDisponible
+    ? 'border-red-500/30 bg-red-500/10 min-[1025px]:border-surface-700/50 min-[1025px]:bg-red-500/5'
+    : 'border-surface-700 bg-surface-700/30 min-[1025px]:border-surface-700/50 min-[1025px]:bg-transparent'
+
+  // "Listo"/Enter cierra el teclado virtual para que reaparezca la barra de acciones.
+  const cerrarTecladoConEnter = (e) => { if (e.key === 'Enter') e.currentTarget.blur() }
 
   return (
-    <tr className={`border-b border-surface-700/50 ${item.noDisponible ? 'bg-red-500/5' : ''}`}>
-      {/* # */}
-      <td className="py-2 px-3 text-surface-500 text-sm font-mono w-8 select-none">{index + 1}</td>
+    <tr
+      className={`grid grid-cols-12 gap-x-3 gap-y-3 rounded-xl border p-3 scroll-mb-32
+                  min-[1025px]:table-row min-[1025px]:rounded-none min-[1025px]:border-0 min-[1025px]:border-b
+                  min-[1025px]:p-0 min-[1025px]:scroll-mb-0 ${claseFila}`}>
+      {/* # — en tarjeta es el encabezado "Ítem N" (a la izquierda; el borrar va a la derecha) */}
+      <td className="col-span-6 flex items-center text-surface-300 text-sm font-mono select-none
+                     min-[1025px]:table-cell min-[1025px]:py-2 min-[1025px]:px-3 min-[1025px]:w-8 min-[1025px]:text-surface-500">
+        <span className="min-[1025px]:hidden">Ítem&nbsp;</span>{index + 1}
+      </td>
 
       {/* Cantidad */}
-      <td className="py-2 px-2 w-20">
+      <td className="col-span-4 min-[768px]:col-span-2 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-20">
+        <span aria-hidden="true" className={etiqueta}>Cant.</span>
         <div className="relative">
-          <input ref={cantRef} type="text" inputMode="numeric" value={item.cantidad}
+          <input ref={cantRef} type="text" inputMode="numeric" enterKeyHint="done" value={item.cantidad}
+            aria-label={`Cantidad del ítem ${index + 1}`}
+            onKeyDown={compacto ? cerrarTecladoConEnter : undefined}
             onChange={e => {
               onClearError()
               const raw = e.target.value.replace(/\D/g, '')
@@ -628,101 +587,70 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
             onMouseLeave={() => setShowTooltip(false)}
             className={cell + ' w-full text-center' + (stockWarning ? ' !border-yellow-500 !text-yellow-300' : '')} />
         </div>
+        {/* Globo flotante: sólo escritorio (en táctil no hay hover; ahí el aviso va en línea, más abajo). */}
         {stockWarning && showTooltip && createPortal(
           <div style={{ position: 'absolute', top: tooltipPos.top, left: tooltipPos.left, zIndex: 9999, pointerEvents: 'none' }}
                className="bg-yellow-900/95 border border-yellow-500/60 text-yellow-200 text-[11px] font-body
-                          rounded-lg px-2.5 py-1.5 shadow-xl whitespace-nowrap flex items-center gap-1.5">
+                          rounded-lg px-2.5 py-1.5 shadow-xl whitespace-nowrap hidden min-[1025px]:flex items-center gap-1.5">
             <span>⚠</span><span>{stockWarning}</span>
           </div>,
           document.body
         )}
       </td>
 
-      {/* Nombre */}
-      <td className="py-2 px-2 min-w-[200px]" ref={wrapRef}>
-        <div className="relative">
-          {/* [OPTIMIZACIÓN 1] onChange apunta a handleNombreChange (solo estado local) */}
-          <input
-            ref={inputRef}
-            value={nombreSearch}
-            onChange={e => handleNombreChange(e.target.value)}
-            placeholder="Nombre del producto..."
-            className={cell + ' w-full pr-7'}
-          />
-          {/* [OPTIMIZACIÓN 6] Spinner de búsqueda de producto */}
-          {searchingProd && (
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
-              <div className="w-3 h-3 border-2 border-brand-500/30 border-t-brand-400 rounded-full animate-spin" />
-            </div>
-          )}
-        </div>
+      {/* Nombre — solo lectura: el producto se elige en los buscadores de arriba (quitar y volver a agregar para cambiarlo) */}
+      <td className="col-span-8 min-[768px]:col-span-5 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:min-w-[200px]">
+        <span aria-hidden="true" className={etiqueta}>Producto</span>
+        <p aria-label={`Producto del ítem ${index + 1}`}
+           className="flex items-center min-h-[44px] min-[1025px]:min-h-0 text-white text-base min-[1025px]:text-sm font-body leading-snug break-words">
+          {item.nombreProducto || '—'}
+        </p>
         {/* [BORRADOR] Escenario 7: producto dado de baja mientras el borrador estaba guardado */}
         {item.noDisponible && (
-          <p className="text-red-400 text-[10px] font-body mt-1 leading-tight">
+          <p className="text-red-400 text-xs min-[1025px]:text-[10px] font-body mt-1 leading-tight">
             No disponible — quitá este ítem para poder guardar.
           </p>
         )}
-        {showDrop && createPortal(
-          <div
-            data-producto-drop
-            style={{ position: 'absolute', top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
-            className="bg-surface-800 border border-surface-600 rounded-xl shadow-2xl max-h-[260px] overflow-y-auto"
-          >
-            {nombreResults.length === 0 ? (
-              <p className="px-4 py-3 text-surface-300 text-xs font-body">
-                Sin resultados para "{nombreSearch}"
-              </p>
-            ) : (
-              nombreResults.map(p => (
-                <button key={p.idProducto} onClick={() => seleccionarProducto(p)}
-                  className="w-full text-left px-3 py-2.5 hover:bg-surface-700 transition-colors
-                             border-b border-surface-700/60 last:border-0">
-                  <p className="text-white text-xs font-body leading-tight">{p.nombre}</p>
-                  <p className="text-surface-400 text-xs font-mono mt-0.5">
-                    #{p.idProducto} · {fmt(p.precioUnitario)}{p.tieneMedidas ? ' · Con medidas' : ''}
-                  </p>
-                </button>
-              ))
-            )}
-          </div>,
-          document.body
-        )}
       </td>
 
-      {/* ID */}
-      <td className="py-2 px-2 w-28">
-        <input type="text" inputMode="numeric" value={item.idProducto || ''}
-          onChange={e => handleIdChange(e.target.value)}
-          placeholder="ID"
-          className={cell + ' w-full text-center' + (idError ? ' border-red-500' : '')} />
-        {idError && <p className="text-red-400 text-[10px] font-body mt-0.5 leading-tight">{idError}</p>}
+      {/* ID — solo lectura */}
+      <td className="col-span-6 min-[768px]:col-span-2 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-28">
+        <span aria-hidden="true" className={etiqueta}>ID</span>
+        <p aria-label={`ID del producto del ítem ${index + 1}`}
+           className="flex items-center justify-center min-h-[44px] min-[1025px]:min-h-0 text-surface-200 text-base min-[1025px]:text-sm font-mono">
+          {item.idProducto || '—'}
+        </p>
       </td>
 
       {/* Medida */}
-      <td className="py-2 px-2 w-32">
+      <td className="col-span-6 min-[768px]:col-span-3 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-32">
+        <span aria-hidden="true" className={etiqueta}>Medida</span>
         {!usaMedidas ? (
           // Producto que no maneja medidas: no hay nada que elegir acá.
-          <span className="text-surface-500 text-xs px-2">—</span>
+          <span className="flex items-center min-h-[44px] min-[1025px]:inline min-[1025px]:min-h-0 text-surface-500 text-xs px-2">—</span>
         ) : sinStockEnNingunaMedida ? (
           // Escenario 1: el producto usa medidas pero ninguna variante tiene
           // stock cargado (o no tiene variantes en absoluto). En vez de dejar
           // el selector vacío/engañoso, se deshabilita e informa el motivo
           // explícitamente para que el usuario no confunda esto con un olvido
           // suyo de elegir una medida.
-          <select disabled value=""
+          <select disabled value="" aria-label={`Medida del ítem ${index + 1}: sin stock en ninguna medida`}
             title="Este producto no tiene stock disponible en ninguna medida"
-            className="w-full bg-surface-800 border border-red-900/50 rounded-lg px-2 py-1.5
-                       text-red-400/90 text-xs font-body cursor-not-allowed">
+            className="w-full bg-surface-800 border border-red-900/50 rounded-lg px-3 py-2 min-h-[44px]
+                       text-red-400/90 text-sm font-body cursor-not-allowed
+                       min-[1025px]:px-2 min-[1025px]:py-1.5 min-[1025px]:min-h-0 min-[1025px]:text-xs">
             <option value="">Sin stock</option>
           </select>
         ) : (
           <select value={item.medida || ''}
+            aria-label={`Medida del ítem ${index + 1}`}
             onChange={e => {
               onUpdate(uid, 'medida', e.target.value)
               checkStock(item.idProducto, e.target.value, item.cantidad)
             }}
-            className="w-full bg-surface-700 border border-surface-600 rounded-lg px-2 py-1.5
-                       text-white text-sm font-body focus:outline-none focus:border-brand-500 transition-all cursor-pointer">
+            className="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 min-h-[44px]
+                       text-white text-base font-body focus:outline-none focus:border-brand-500 transition-all cursor-pointer
+                       min-[1025px]:px-2 min-[1025px]:py-1.5 min-[1025px]:min-h-0 min-[1025px]:text-sm">
             <option value="">— medida —</option>
             {medidas.map(m => (
               <option key={m.medida} value={m.medida}>
@@ -733,8 +661,19 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
         )}
       </td>
 
+      {/* Aviso de stock en línea — sólo tarjeta. En escritorio queda `display: none` (no cuenta
+          como columna) y el aviso sigue siendo el globo flotante de la cantidad. */}
+      {stockWarning && (
+        <td role="status" className="col-span-12 min-[1025px]:hidden -mt-1 flex items-center gap-1.5
+                                     rounded-lg border border-yellow-500/40 bg-yellow-900/20 px-3 py-2
+                                     text-yellow-200 text-sm font-body">
+          <span aria-hidden="true">⚠</span><span className="min-w-0 break-words">{stockWarning}</span>
+        </td>
+      )}
+
       {/* Precio — con soporte de promociones */}
-      <td className="py-2 px-2 w-44">
+      <td className="col-span-12 min-[640px]:col-span-6 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-44">
+        <span aria-hidden="true" className={etiqueta}>Precio unit.</span>
         <div ref={priceRef} className="space-y-0.5">
           {tienePromo ? (
             <>
@@ -743,13 +682,13 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
                 {fmt(parseFloat(item.precioUnitario))}
               </div>
               {/* Precio promocional */}
-              <div className="text-emerald-400 text-sm font-mono font-semibold">
+              <div className="text-emerald-400 text-sm font-mono font-semibold break-words">
                 {fmt(precioEfectivo)}
               </div>
               {/* Badge de promo */}
-              <div className="flex items-center gap-1 mt-0.5">
-                <Tag size={10} className="text-emerald-500 flex-shrink-0" />
-                <span className="text-emerald-500 text-[10px] font-body truncate max-w-[100px]">
+              <div className="flex items-center gap-1 mt-0.5 min-w-0">
+                <Tag size={10} className="text-emerald-500 flex-shrink-0" aria-hidden="true" />
+                <span className="text-emerald-500 text-[10px] font-body truncate max-w-full min-[1025px]:max-w-[100px]">
                   {itemConPromo.promoAplicada?.nombre ?? ''}
                 </span>
               </div>
@@ -760,7 +699,8 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
             </>
           ) : (
             <div
-              className={`rounded-lg px-2 py-1.5 text-sm font-mono cursor-not-allowed select-none
+              className={`rounded-lg px-3 py-2 min-h-[44px] flex items-center text-base font-mono cursor-not-allowed select-none
+                         min-[1025px]:block min-[1025px]:px-2 min-[1025px]:py-1.5 min-[1025px]:min-h-0 min-[1025px]:text-sm
                          ${priceWarning
                            ? 'bg-yellow-900/40 border border-yellow-500 text-yellow-300'
                            : 'bg-surface-800 border border-surface-700 text-surface-300'}`}
@@ -780,16 +720,22 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
             </div>
           )}
         </div>
+        {/* En táctil no hay hover: el motivo se muestra siempre en línea. */}
+        {priceWarning && !tienePromo && (
+          <p className="min-[1025px]:hidden text-yellow-300 text-xs font-body mt-1 leading-tight">
+            Sin precio definido — asignalo desde Inventario.
+          </p>
+        )}
         {/* [BORRADOR] Escenario 7: el precio vigente difiere del que tenía el borrador */}
         {item.precioAnterior != null && !item.noDisponible && (
-          <p className="text-yellow-400 text-[10px] font-body mt-0.5 leading-tight">
+          <p className="text-yellow-400 text-xs min-[1025px]:text-[10px] font-body mt-0.5 leading-tight">
             Precio actualizado (antes {fmt(item.precioAnterior)})
           </p>
         )}
         {priceWarning && showPriceTooltip && createPortal(
           <div style={{ position: 'absolute', top: priceTooltipPos.top, left: priceTooltipPos.left, zIndex: 9999, pointerEvents: 'none' }}
                className="bg-yellow-900/95 border border-yellow-500/60 text-yellow-200 text-[11px] font-body
-                          rounded-lg px-2.5 py-1.5 shadow-xl whitespace-nowrap flex items-center gap-1.5">
+                          rounded-lg px-2.5 py-1.5 shadow-xl whitespace-nowrap hidden min-[1025px]:flex items-center gap-1.5">
             <span>⚠</span><span>Sin precio definido — asignarlo desde Inventario</span>
           </div>,
           document.body
@@ -797,16 +743,21 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
       </td>
 
       {/* Subtotal — usa precio efectivo */}
-      <td className="py-2 px-3 text-right w-36">
-        <span className={`text-sm font-mono ${tienePromo ? 'text-emerald-300' : 'text-surface-200'}`}>
+      <td className="col-span-12 min-[640px]:col-span-6 min-w-0 text-right min-[1025px]:py-2 min-[1025px]:px-3 min-[1025px]:w-36">
+        <span aria-hidden="true" className={etiqueta}>Subtotal</span>
+        <span className={`block text-base min-[1025px]:inline min-[1025px]:text-sm font-mono break-words ${tienePromo ? 'text-emerald-300' : 'text-surface-200'}`}>
           {item.noDisponible ? '—' : fmt((parseInt(item.cantidad) || 0) * precioEfectivo)}
         </span>
       </td>
 
-      {/* Borrar */}
-      <td className="py-2 px-2 w-10">
-        <button onClick={() => onRemove(uid)} className="text-surface-500 hover:text-red-400 transition-colors p-1 rounded">
-          <Trash2 size={15} />
+      {/* Borrar — en tarjeta se ubica arriba a la derecha (fila del encabezado), con área táctil de 44×44 */}
+      <td className="col-span-6 col-start-7 row-start-1 justify-self-end min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-10">
+        <button type="button" onClick={() => onRemove(uid)} aria-label={`Eliminar ítem ${index + 1}`}
+          className="flex items-center justify-center -mr-2 min-h-[44px] min-w-[44px]
+                     min-[1025px]:inline-block min-[1025px]:mr-0 min-[1025px]:min-h-0 min-[1025px]:min-w-0 min-[1025px]:p-1
+                     text-surface-500 hover:text-red-400 transition-colors rounded
+                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/60">
+          <Trash2 size={15} aria-hidden="true" />
         </button>
       </td>
     </tr>
@@ -815,8 +766,10 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
 
 // ─── Selector método de pago ────────────────────────────────────────────────
 
-function MetodoPagoSelector({ metodoPago, onMetodoPago, excepcionFactor, onExcepcionFactor, excepcionSubMetodo, onExcepcionSubMetodo, pct, onPct }) {
+function MetodoPagoSelector({ metodoPago, onMetodoPago, excepcionFactor, onExcepcionFactor, excepcionSubMetodo, onExcepcionSubMetodo, pct, onPct, compacto = false }) {
   const esExcepcion = metodoPago === 'excepcion'
+  const uid = useId()
+  const pctRef = useRef(null)
 
   useEffect(() => {
     if (esExcepcion && pct !== '') {
@@ -830,19 +783,40 @@ function MetodoPagoSelector({ metodoPago, onMetodoPago, excepcionFactor, onExcep
   }
 
   const todos = [...METODOS_BASE, { value: 'excepcion', label: 'Excepción', texto: 'Desc. manual' }]
+  const recargo = esRecargoPct(pct)
+
+  // Cambia el signo y, si todavía no hay magnitud, lleva el foco al campo con el cursor AL FINAL
+  // (si el cursor quedara antes del "−", el primer dígito se rechazaría por el filtro del input).
+  function cambiarTipoAjuste(tipo) {
+    const siguiente = aplicarSignoPct(pct, tipo)
+    onPct(siguiente)
+    if (siguiente.replace('-', '') !== '') return
+    requestAnimationFrame(() => {
+      const el = pctRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+  }
 
   return (
     <div className="mt-5">
-      <label className="block text-surface-300 text-xs tracking-widest uppercase font-body mb-2">Método de Pago</label>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-        {todos.map(m => {
+      <p id={`${uid}-etiqueta`} className="block text-surface-300 text-sm min-[1025px]:text-xs tracking-widest uppercase font-body mb-2">Método de Pago</p>
+      {/* [MOBILE/TABLET] 2 columnas en celular (Excepción ocupa la fila completa), 3 en tablet y 5 en
+          escritorio: con 5 columnas en una tablet (~120 px cada una) "Precio de lista" y "10.5% recargo"
+          se cortaban. Alto mínimo 56 px: objetivo táctil cómodo. */}
+      <div role="group" aria-labelledby={`${uid}-etiqueta`}
+        className="grid grid-cols-2 min-[640px]:grid-cols-3 min-[1025px]:grid-cols-5 gap-2">
+        {todos.map((m, i) => {
           const active = metodoPago === m.value
+          const ultimo = i === todos.length - 1
           return (
-            <button key={m.value} onClick={() => seleccionar(m.value)}
-              className={`rounded-xl px-3 py-3 text-left border transition-all
+            <button key={m.value} type="button" aria-pressed={active} onClick={() => seleccionar(m.value)}
+              className={`min-w-0 min-h-[56px] min-[1025px]:min-h-0 rounded-xl px-3 py-3 text-left border transition-all
+                ${ultimo ? 'col-span-2 min-[1025px]:col-span-1' : ''}
                 ${active ? 'bg-brand-500/15 border-brand-500/50 text-white' : 'bg-surface-700 border-surface-600 text-surface-300 hover:border-surface-500'}`}>
-              <p className="text-sm font-body font-medium leading-tight">{m.label}</p>
-              <p className={`text-xs mt-0.5 font-mono ${active ? 'text-brand-400' : 'text-surface-500'}`}>{m.texto}</p>
+              <p className="text-sm font-body font-medium leading-tight break-words">{m.label}</p>
+              <p className={`text-xs mt-0.5 font-mono break-words ${active ? 'text-brand-400' : 'text-surface-500'}`}>{m.texto}</p>
             </button>
           )
         })}
@@ -850,33 +824,113 @@ function MetodoPagoSelector({ metodoPago, onMetodoPago, excepcionFactor, onExcep
 
       {esExcepcion && (
         <div className="mt-3 bg-surface-700/60 border border-surface-600 rounded-xl p-4 space-y-3">
-          <p className="text-surface-300 text-xs font-body uppercase tracking-widest">Configurar Excepción</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-surface-400 text-xs font-body mb-1">Forma de pago base</label>
-              <select value={excepcionSubMetodo} onChange={e => onExcepcionSubMetodo(e.target.value)}
-                className="w-full bg-surface-800 border border-surface-600 rounded-xl px-3 py-2 text-white text-sm
+          <p className="text-surface-300 text-sm min-[1025px]:text-xs font-body uppercase tracking-widest">Configurar Excepción</p>
+          <div className="grid grid-cols-1 min-[640px]:grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <label htmlFor={`${uid}-sub`} className="block text-surface-400 text-sm min-[1025px]:text-xs font-body mb-1">Forma de pago base</label>
+              <select id={`${uid}-sub`} value={excepcionSubMetodo} onChange={e => onExcepcionSubMetodo(e.target.value)}
+                className="w-full bg-surface-800 border border-surface-600 rounded-xl px-3 py-2 min-h-[44px] min-[1025px]:min-h-0
+                           text-white text-base min-[1025px]:text-sm
                            font-body focus:outline-none focus:border-brand-500 transition-all">
                 {METODOS_BASE.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </div>
-            <div>
-              <label className="block text-surface-400 text-xs font-body mb-1">% Descuento (+) / Recargo (−)</label>
-              <input type="text" inputMode="decimal" value={pct}
+            <div className="min-w-0">
+              <label htmlFor={`${uid}-pct`} className="block text-surface-400 text-sm min-[1025px]:text-xs font-body mb-1">% Descuento (+) / Recargo (−)</label>
+              <input ref={pctRef} id={`${uid}-pct`} type="text" inputMode="decimal" enterKeyHint="done" autoComplete="off" value={pct}
                 onChange={e => { const v = e.target.value.replace(',', '.'); if (/^-?\d*\.?\d*$/.test(v)) onPct(v) }}
                 placeholder="Ej: 10 → 10% desc."
-                className="w-full bg-surface-800 border border-surface-600 rounded-xl px-3 py-2 text-white text-sm
-                           font-mono focus:outline-none focus:border-brand-500 transition-all
+                className="w-full bg-surface-800 border border-surface-600 rounded-xl px-3 py-2 min-h-[44px] min-[1025px]:min-h-0
+                           text-white text-base min-[1025px]:text-sm font-mono focus:outline-none focus:border-brand-500 transition-all
                            [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none" />
+              {/* [MOBILE/TABLET] El teclado decimal de iOS no tiene la tecla "−": sin esto no se podía
+                  cargar un RECARGO desde un iPhone. El selector escribe el signo en el mismo campo, así
+                  que el valor guardado y el factor (1 − pct/100) son idénticos a los de escritorio. */}
+              {compacto && (
+                <div role="group" aria-label="Tipo de ajuste" className="mt-2 grid grid-cols-2 gap-2">
+                  {[['descuento', 'Descuento'], ['recargo', 'Recargo']].map(([tipo, texto]) => {
+                    const activo = tipo === 'recargo' ? recargo : !recargo
+                    return (
+                      <button key={tipo} type="button" aria-pressed={activo} onClick={() => cambiarTipoAjuste(tipo)}
+                        className={`min-h-[44px] rounded-xl border px-3 text-sm font-body font-medium transition-all
+                          ${activo ? 'bg-brand-500/15 border-brand-500/50 text-white' : 'bg-surface-800 border-surface-600 text-surface-300 hover:border-surface-500'}`}>
+                        {texto}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           </div>
           {pct !== '' && (
-            <p className="text-brand-400 text-xs font-mono">
+            <p className="text-brand-400 text-xs font-mono break-words">
               Factor: {(1 - (parseFloat(pct)||0)/100).toFixed(4)} · el precio final será {((1-(parseFloat(pct)||0)/100)*100).toFixed(2)}% del original (solo ítems sin promoción)
             </p>
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Pantalla de éxito ──────────────────────────────────────────────────────
+// Extraída del componente principal para poder gestionar el foco (hook) sin violar las reglas de
+// hooks: el original la devolvía con un `return` temprano. El contenido es el mismo.
+// [MOBILE/TABLET] Contenedor con scroll propio (en landscape el contenido supera el alto de la
+// pantalla y quedaba cortado), padding adaptado, filas que admiten nombres largos y botón de cierre
+// de 44×44. Semántica de diálogo + foco inicial dentro del mismo.
+function PantallaGuardado({ guardado, onNuevo, onVer }) {
+  const dialogoRef = useRef(null)
+  useEffect(() => { dialogoRef.current?.focus() }, [])
+
+  const fila = 'flex justify-between items-center gap-3'
+  const etiqueta = 'text-surface-400 text-xs uppercase tracking-widest font-body flex-shrink-0'
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 overflow-y-auto overscroll-contain">
+      <div className="flex min-h-full items-center justify-center p-4">
+        <div ref={dialogoRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="presupuesto-guardado-titulo"
+          className="relative max-w-lg w-full bg-surface-800 border border-surface-700 rounded-2xl p-6 pt-8 sm:p-10 sm:pt-8
+                     space-y-4 text-center animate-slide-up motion-reduce:animate-none outline-none">
+          <button onClick={onNuevo} aria-label="Cerrar y empezar un presupuesto nuevo"
+            className="absolute top-1.5 right-1.5 min-[1025px]:top-3 min-[1025px]:right-3 flex items-center justify-center
+                       min-[1025px]:block min-h-[44px] min-w-[44px] min-[1025px]:min-h-0 min-[1025px]:min-w-0 p-1
+                       text-surface-400 hover:text-white transition-colors">
+            <X size={20} aria-hidden="true" />
+          </button>
+          <CheckCircle2 size={52} className="text-emerald-400 mx-auto" aria-hidden="true" />
+          <h2 id="presupuesto-guardado-titulo" className="font-display text-3xl text-white tracking-widest">GUARDADO</h2>
+          <div className="bg-surface-700/60 border border-surface-600 rounded-xl px-4 sm:px-5 py-4 text-left space-y-2">
+            <div className={fila}>
+              <span className={etiqueta}>Presupuesto</span>
+              <span className="text-brand-400 font-mono font-bold">#{guardado.idPresupuesto}</span>
+            </div>
+            <div className={fila}>
+              <span className={etiqueta}>Cliente</span>
+              <span className="min-w-0 break-words text-right text-white text-sm font-body">{guardado.clienteNombre}</span>
+            </div>
+            <div className={fila}>
+              <span className={etiqueta}>Total</span>
+              <span className="min-w-0 break-words text-right text-brand-400 font-mono font-bold">{fmt(guardado.totalFinal)}</span>
+            </div>
+            <div className={fila}>
+              <span className={etiqueta}>Método</span>
+              <span className="min-w-0 break-words text-right text-surface-200 text-sm font-body">{guardado.metodoLabel}</span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 pt-2">
+            <Button icon={Download} className="w-full min-h-[44px] min-[1025px]:min-h-0" onClick={() => generarPDFPresupuesto(guardado.idPresupuesto)}>
+              Descargar PDF del Presupuesto
+            </Button>
+            <Button icon={FileText} variant="secondary" className="w-full min-h-[44px] min-[1025px]:min-h-0" onClick={onVer}>
+              Ver presupuesto
+            </Button>
+            <Button variant="secondary" className="w-full min-h-[44px] min-[1025px]:min-h-0" onClick={onNuevo}>
+              Nuevo Presupuesto
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -887,6 +941,13 @@ const ITEM_EMPTY = () => ({ _uid: Math.random().toString(36).slice(2), idProduct
 export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVerHistorial, usuarioId }) {
   const navigate = useNavigate()
   const modoEdicion = !!presupuestoEditar
+
+  // [MOBILE/TABLET] `compacto` = ≤ 1024 px (táctil). Se lee UNA vez acá y baja por props (no hay
+  // una suscripción a matchMedia por fila). Rotar el equipo sólo cambia estos valores: el estado
+  // del formulario vive en este componente y no se desmonta.
+  const { isCompact: compacto, isDesktop } = useBreakpoint()
+  const online = useOnlineStatus()
+  const tecladoAbierto = useTecladoVirtual()
 
   // [BORRADOR] Lectura SINCRÓNICA y única al montar: el formulario nace ya
   // restaurado (sin parpadeo de formulario vacío). Solo en alta; la edición de
@@ -913,7 +974,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
   const [items,              setItems]               = useState(() =>
     borradorInicial?.items.length
       ? borradorInicial.items.map(it => ({ ...ITEM_EMPTY(), ...it })) // _uid nuevo por fila
-      : [ITEM_EMPTY()]
+      : []
   )
   // % de excepción tal como lo tipeó el usuario (antes vivía dentro de MetodoPagoSelector).
   const [pct,                setPct]                 = useState(borradorInicial?.pct ?? '')
@@ -1036,7 +1097,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
         setExcepcionSubMetodo(esExcepcionDB ? pres.metodoPago : 'efectivo')
         setExcepcionFactor(factorDB)
         setPct(pctDB)
-        setItems(itemsDB.length ? itemsDB : [ITEM_EMPTY()])
+        setItems(itemsDB)
         setInitDone(true)
       } catch (err) {
         setInitError(err.message || 'Error al cargar el presupuesto.')
@@ -1182,19 +1243,26 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
     setError('')
   }, [])
 
-  // [FIX Escenario 1] Cargar un nuevo producto es una "nueva acción" del
-  // usuario tanto como editar un campo existente. Antes solo `updateItem`
-  // limpiaba `error`, por lo que un mensaje de un intento de guardado
-  // anterior quedaba visible —mezclado con la fila recién agregada— hasta
-  // que el usuario tocara alguno de los campos de un ítem ya existente.
-  const addItem = useCallback(() => {
-    setItems(prev => [...prev, ITEM_EMPTY()])
+  // [BUSCADORES] Agrega el producto elegido en un buscador con cantidad 1. Los importes salen de los
+  // mismos campos que antes (precioUnitario / idCategoria), así que promociones, ajustes y totales
+  // se calculan igual. Cargar un producto es una "nueva acción": limpia el error general previo.
+  const agregarDesdeBuscador = useCallback((p) => {
+    setItems(prev => [...prev, {
+      ...ITEM_EMPTY(),
+      idProducto:     String(p.idProducto),
+      nombreProducto: p.nombre,
+      cantidad:       1,
+      precioUnitario: p.precioUnitario,
+      idCategoria:    p.idCategoria ?? null,
+      medida:         null,
+      verificarStock: true,
+    }])
     setError('')
   }, [])
 
   // Quitar un ítem también es una acción correctiva válida (p. ej. el ítem
   // eliminado era el que disparó el error de stock/precio original), así
-  // que se limpia el error general por la misma razón que en `addItem`.
+  // que se limpia el error general por la misma razón que al agregar un producto desde el buscador.
   const removeItem = useCallback((uid) => {
     setItems(prev => prev.filter(it => it._uid !== uid))
     setStockErrors(prev => { const n = { ...prev }; delete n[uid]; return n })
@@ -1398,7 +1466,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
     // [OPTIMIZACIÓN 2] Limpiar caché al iniciar un presupuesto nuevo para
     // no trabajar con datos de stock desactualizados de la sesión anterior.
     productoCacheRef.current.clear()
-    setCliente(null); setMetodoPago('efectivo'); setItems([ITEM_EMPTY()])
+    setCliente(null); setMetodoPago('efectivo'); setItems([])
     setGuardado(null); setError(''); setExcepcionFactor(1); setExcepcionSubMetodo('efectivo')
     // [BORRADOR] Escenario 4: el formulario siguiente nace vacío y vuelve a autoguardarse.
     setPct(''); setAvisoBorrador(null); reanudarBorrador()
@@ -1424,47 +1492,14 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
   // ── Pantalla de éxito ──
   if (guardado) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-        <div className="relative max-w-lg w-full bg-surface-800 border border-surface-700 rounded-2xl p-10 pt-8 space-y-4 text-center animate-slide-up">
-          <button onClick={nuevo} className="absolute top-3 right-3 p-1 text-surface-400 hover:text-white transition-colors">
-            <X size={20} />
-          </button>
-          <CheckCircle2 size={52} className="text-emerald-400 mx-auto" />
-          <h2 className="font-display text-3xl text-white tracking-widest">GUARDADO</h2>
-          <div className="bg-surface-700/60 border border-surface-600 rounded-xl px-5 py-4 text-left space-y-2">
-            <div className="flex justify-between items-center">
-              <span className="text-surface-400 text-xs uppercase tracking-widest font-body">Presupuesto</span>
-              <span className="text-brand-400 font-mono font-bold">#{guardado.idPresupuesto}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-surface-400 text-xs uppercase tracking-widest font-body">Cliente</span>
-              <span className="text-white text-sm font-body">{guardado.clienteNombre}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-surface-400 text-xs uppercase tracking-widest font-body">Total</span>
-              <span className="text-brand-400 font-mono font-bold">{fmt(guardado.totalFinal)}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-surface-400 text-xs uppercase tracking-widest font-body">Método</span>
-              <span className="text-surface-200 text-sm font-body">{guardado.metodoLabel}</span>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 pt-2">
-            <Button icon={Download} className="w-full" onClick={() => generarPDFPresupuesto(guardado.idPresupuesto)}>
-              Descargar PDF del Presupuesto
-            </Button>
-            <Button icon={FileText} variant="secondary" className="w-full" onClick={() => {
-              if (onVerHistorial) onVerHistorial(guardado.idPresupuesto)
-              else navigate('/historial', { state: { verPresupuesto: guardado.idPresupuesto } })
-            }}>
-              Ver presupuesto
-            </Button>
-            <Button variant="secondary" className="w-full" onClick={nuevo}>
-              Nuevo Presupuesto
-            </Button>
-          </div>
-        </div>
-      </div>
+      <PantallaGuardado
+        guardado={guardado}
+        onNuevo={nuevo}
+        onVer={() => {
+          if (onVerHistorial) onVerHistorial(guardado.idPresupuesto)
+          else navigate('/historial', { state: { verPresupuesto: guardado.idPresupuesto } })
+        }}
+      />
     )
   }
 
@@ -1474,9 +1509,9 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
     <div className="max-w-5xl mx-auto space-y-6">
       {toast && <Toast message={toast} onDone={() => setToast('')} />}
       {modoEdicion && (
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <button onClick={() => onEditarVolver && onEditarVolver(presupuestoEditar)}
-            className="flex items-center gap-2 text-surface-400 hover:text-white text-sm font-body transition-colors">
+            className="flex items-center gap-2 min-h-[44px] min-[1025px]:min-h-0 text-surface-400 hover:text-white text-sm font-body transition-colors">
             <ArrowLeft size={16} />Volver al historial
           </button>
           <span className="text-surface-600">/</span>
@@ -1487,9 +1522,11 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
       )}
       <PageHeader title={modoEdicion ? 'Editar Presupuesto' : 'Presupuestador'} subtitle={modoEdicion ? `Modificando #${presupuestoEditar}` : 'Nuevo presupuesto'} />
 
-      {/* [BORRADOR] Estado del autoguardado (reserva su altura: no mueve el layout) */}
+      {/* [BORRADOR] Estado del autoguardado (reserva su altura: no mueve el layout).
+          [MOBILE] `min-h` en lugar de `h-4`: el aviso de error de almacenamiento ocupa 2-3 líneas en un
+          celular y, con alto fijo, se montaba sobre el componente siguiente. */}
       {!modoEdicion && (
-        <p className={`h-4 -mt-3 text-xs font-body ${errorAlmacenamiento ? 'text-yellow-400' : 'text-surface-500'}`} aria-live="polite">
+        <p className={`min-h-[1rem] -mt-3 text-xs font-body ${errorAlmacenamiento ? 'text-yellow-400' : 'text-surface-500'}`} aria-live="polite">
           {errorAlmacenamiento
             ? 'No se pudo guardar el borrador en este navegador. Terminá el presupuesto antes de salir.'
             : ultimoGuardado
@@ -1509,13 +1546,13 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
       )}
 
       {/* Cabecera */}
-      <Card className="p-6">
+      <Card className="p-4 sm:p-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-          <div className="md:col-span-2">
-            <ClienteSelector value={cliente} onChange={v => { setCliente(v); setError('') }} onToast={setToast} />
+          <div className="md:col-span-2 min-w-0">
+            <ClienteSelector value={cliente} onChange={v => { setCliente(v); setError('') }} onToast={setToast} compacto={compacto} />
           </div>
           <div>
-            <label className="block text-surface-300 text-xs tracking-widest uppercase font-body mb-1">Fecha</label>
+            <label className="block text-surface-300 text-sm min-[1025px]:text-xs tracking-widest uppercase font-body mb-1">Fecha</label>
             <div className="bg-surface-700 border border-surface-600 rounded-xl px-4 py-2.5 text-surface-300 text-sm font-mono">
               {today()}
             </div>
@@ -1531,25 +1568,26 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
           onExcepcionSubMetodo={setExcepcionSubMetodo}
           pct={pct}
           onPct={setPct}
+          compacto={compacto}
         />
       </Card>
 
-      {/* Tabla */}
+      {/* Tabla (≥ 1025 px) / lista de tarjetas (≤ 1024 px): mismo <table>, ver ItemRow. */}
       <Card className="overflow-visible">
-        <div className="px-6 py-4 border-b border-surface-700 flex items-center justify-between">
+        <div className="px-4 sm:px-6 py-4 border-b border-surface-700">
           <h2 className="font-body font-semibold text-white text-sm">Productos</h2>
-          <Button size="sm" icon={Plus} onClick={addItem}>Agregar ítem</Button>
         </div>
-        <div className="overflow-x-auto overflow-y-visible">
-          <table className="w-full text-sm">
-            <thead>
+        <BuscadorProductos promociones={promoVigentes} onAgregar={agregarDesdeBuscador} />
+        <div className="min-[1025px]:overflow-x-auto min-[1025px]:overflow-y-visible">
+          <table className="w-full text-sm block min-[1025px]:table">
+            <thead className="hidden min-[1025px]:table-header-group">
               <tr className="border-b border-surface-700">
                 {['#','Cant.','Nombre','ID','Medida','Precio Unit.','Subtotal',''].map(h => (
                   <th key={h} className="text-left text-surface-400 text-xs tracking-widest uppercase py-3 px-2 first:px-3 font-body">{h}</th>
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="block space-y-3 p-3 min-[1025px]:table-row-group min-[1025px]:space-y-0 min-[1025px]:p-0">
               {items.map((item, idx) => (
                 <ItemRow
                   key={item._uid}
@@ -1563,56 +1601,49 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
                   onStockError={handleStockError}
                   // [OPTIMIZACIÓN 2] Pasar el helper de caché a cada fila
                   getProductoCached={getProductoCached}
+                  compacto={compacto}
                 />
               ))}
             </tbody>
           </table>
         </div>
-        {items.length > 0 && (
-          <div className="px-4 py-3 border-t border-surface-700/50">
-            <button
-              onClick={addItem}
-              className="flex items-center gap-2 text-brand-400 hover:text-brand-300 text-sm font-body transition-colors">
-              <Plus size={15} />
-              Agregar ítem
-            </button>
-          </div>
-        )}
         {items.length === 0 && (
           <div className="text-center py-10 text-surface-500 font-body text-sm">
-            Sin ítems. Hacé clic en "Agregar ítem" para empezar.
+            Sin ítems. Buscá un producto por nombre o ID para empezar.
           </div>
         )}
       </Card>
 
       {/* Totales */}
-      <Card className="p-6">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-          <div className="space-y-2 text-sm font-body">
+      <Card className="p-4 sm:p-6">
+        <div className="flex flex-col min-[1025px]:flex-row min-[1025px]:items-end justify-between gap-6">
+          {/* [MOBILE/TABLET] Ocupa todo el ancho; cada línea es `etiqueta ········ importe` con el importe
+              siempre pegado al borde derecho (ver FILA_MONTO / VALOR_MONTO). */}
+          <div className="w-full min-[1025px]:w-auto space-y-2 text-sm font-body">
 
             {/* Precio lista */}
-            <div className="flex justify-between gap-12">
-              <span className="text-surface-400">Subtotal (precio lista):</span>
-              <span className="text-surface-200 font-mono">{fmt(subtotalSinPromo)}</span>
+            <div className={`${FILA_MONTO} min-[1025px]:items-stretch`}>
+              <span className="min-w-0 break-words text-surface-400">Subtotal (precio lista):</span>
+              <span className={`${VALOR_MONTO} text-surface-200 font-mono`}>{fmt(subtotalSinPromo)}</span>
             </div>
 
             {/* Ahorro por promociones — solo si hay diferencia */}
             {ahorro > 0 && (
-              <div className="flex justify-between gap-12 items-center">
-                <span className="flex items-center gap-1.5 text-emerald-400">
-                  <Tag size={12} />
-                  Ahorro por promociones:
+              <div className={`${FILA_MONTO} min-[1025px]:items-center`}>
+                <span className="flex min-w-0 items-center gap-1.5 text-emerald-400">
+                  <Tag size={12} className="flex-shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 break-words">Ahorro por promociones:</span>
                 </span>
-                <span className="text-emerald-400 font-mono font-medium">
+                <span className={`${VALOR_MONTO} text-emerald-400 font-mono font-medium`}>
                   − {fmt(ahorro)}
                 </span>
               </div>
             )}
 
             {/* Ajuste por método de pago — solo sobre ítems sin promoción */}
-            <div className="flex justify-between gap-12">
-              <span className="text-surface-400">Ajuste ({metodoLabel}):</span>
-              <span className={`font-mono font-medium ${ajuste < 0 ? 'text-emerald-400' : ajuste > 0 ? 'text-red-400' : 'text-surface-400'}`}>
+            <div className={`${FILA_MONTO} min-[1025px]:items-stretch`}>
+              <span className="min-w-0 break-words text-surface-400">Ajuste ({metodoLabel}):</span>
+              <span className={`${VALOR_MONTO} font-mono font-medium ${ajuste < 0 ? 'text-emerald-400' : ajuste > 0 ? 'text-red-400' : 'text-surface-400'}`}>
                 {ajuste === 0 ? '—' : ajuste < 0 ? `- ${fmt(-ajuste)}` : `+ ${fmt(ajuste)}`}
               </span>
             </div>
@@ -1624,27 +1655,45 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
               </p>
             )}
 
-            <div className="border-t border-surface-700 pt-2 flex justify-between gap-12">
-              <span className="text-white font-semibold">Total a pagar:</span>
-              <span className="text-brand-400 font-mono font-bold text-lg">{fmt(totalFinal)}</span>
+            <div className={`${FILA_MONTO} min-[1025px]:items-stretch border-t border-surface-700 pt-2`}>
+              <span className="min-w-0 break-words text-white font-semibold">Total a pagar:</span>
+              <span className={`${VALOR_MONTO} text-brand-400 font-mono font-bold text-base sm:text-lg`}>{fmt(totalFinal)}</span>
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 items-end">
-            <div className="h-9 flex items-center justify-end">
-              {error && (
-                <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/30
-                                rounded-xl px-3 py-2 max-w-xs">
-                  <AlertCircle size={14} className="flex-shrink-0" />{error}
-                </div>
-              )}
+          {/* Escritorio: el bloque de error + botón de siempre. En mobile/tablet lo reemplaza la barra fija
+              de abajo (así no hay dos botones "Guardar" ni hay que scrollear hasta el final para guardar). */}
+          {isDesktop && (
+            <div className="flex flex-col gap-2 items-end">
+              <div className="h-9 flex items-center justify-end">
+                {error && (
+                  <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/30
+                                  rounded-xl px-3 py-2 max-w-xs">
+                    <AlertCircle size={14} className="flex-shrink-0" />{error}
+                  </div>
+                )}
+              </div>
+              <Button size="lg" onClick={guardar} disabled={saving} className="w-full md:w-auto">
+                {saving ? 'Guardando…' : modoEdicion ? 'Guardar Cambios' : 'Guardar Presupuesto'}
+              </Button>
             </div>
-            <Button size="lg" onClick={guardar} disabled={saving} className="w-full md:w-auto">
-              {saving ? 'Guardando…' : modoEdicion ? 'Guardar Cambios' : 'Guardar Presupuesto'}
-            </Button>
-          </div>
+          )}
         </div>
       </Card>
+
+      {/* [MOBILE/TABLET] Barra fija: total + acción principal + mensajes de error siempre a la vista. */}
+      {compacto && (
+        <BarraAccionesMovil
+          total={totalFinal}
+          textoAccion={modoEdicion ? 'Guardar Cambios' : 'Guardar Presupuesto'}
+          ocupado={saving}
+          onAccion={guardar}
+          error={error}
+          onCerrarError={() => setError('')}
+          sinConexion={!online}
+          oculta={tecladoAbierto}
+        />
+      )}
 
       {/* [BORRADOR] Confirmación: descartar es destructivo e irreversible */}
       <Modal open={confirmarDescarte} onClose={() => setConfirmarDescarte(false)} title="Descartar borrador">
@@ -1653,8 +1702,8 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
             Se borrarán el cliente, los ítems y los ajustes cargados. Esta acción no se puede deshacer.
           </p>
           <div className="flex gap-2">
-            <Button variant="secondary" className="flex-1" onClick={() => setConfirmarDescarte(false)}>Cancelar</Button>
-            <Button className="flex-1" onClick={confirmarDescartarBorrador}>Descartar</Button>
+            <Button variant="secondary" className="flex-1 max-[1024px]:justify-center min-h-[44px] min-[1025px]:min-h-0" onClick={() => setConfirmarDescarte(false)}>Cancelar</Button>
+            <Button className="flex-1 max-[1024px]:justify-center min-h-[44px] min-[1025px]:min-h-0" onClick={confirmarDescartarBorrador}>Descartar</Button>
           </div>
         </div>
       </Modal>

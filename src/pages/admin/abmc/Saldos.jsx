@@ -7,6 +7,8 @@ import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Pencil, Trash2 } from 'lucide-react'
 import { obtenerSaldos, actualizarSaldo, eliminarSaldo } from '../../../services/saldosService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, normalizarTexto, Pagination, ConfirmModal, InfoBanner, dropdownClass } from './comunes'
+import { FiltrosGestionMovil, opcionesTodas } from './comunes'
+import { useBreakpoint } from '../../../hooks/useBreakpoint'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SALDOS
@@ -18,6 +20,7 @@ export default function Saldos() {
   const [editRow, setEditRow] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [search, setSearch] = useState('')
+  const { isCompact } = useBreakpoint()
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filtroEstado, setFiltroEstado] = useState('')
@@ -187,6 +190,17 @@ export default function Saldos() {
 
   return (
     <div className="space-y-4">
+      {/* Mobile/tablet (≤ 1024px): patrón único de filtros (buscador + botón «Filtros» + panel).
+          Desktop: barra inline original, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosGestionMovil
+          search={search} onSearch={setSearch} placeholder="Buscar por ID o nombre de cliente…"
+          valores={{ desde: dateFrom, hasta: dateTo, estado: filtroEstado }}
+          onApply={(b) => { setDateFrom(b.desde); setDateTo(b.hasta); setFiltroEstado(b.estado) }}
+          selects={[{ clave: 'estado', etiqueta: 'Estado', opciones: opcionesTodas([
+            { value: 'pendiente', label: 'Pendiente' }, { value: 'pagado', label: 'Pagado' }]) }]}
+        />
+      ) : (
       <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center w-full">
         <div className="flex-1">
           <input
@@ -207,6 +221,7 @@ export default function Saldos() {
           </select>
         </div>
       </div>
+      )}
 
       {resumenOperacion && (
         <div role="status" aria-live="polite">

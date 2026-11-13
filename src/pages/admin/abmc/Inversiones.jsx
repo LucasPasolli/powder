@@ -7,6 +7,8 @@ import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Plus, Pencil, Trash2, ArrowDownCircle } from 'lucide-react'
 import { obtenerInversiones, crearInversion, actualizarInversion, eliminarInversion } from '../../../services/movimientosService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, cap, normalizarTexto, Pagination, ConfirmModal, dropdownClass } from './comunes'
+import { FiltrosGestionMovil, opcionesTodas } from './comunes'
+import { useBreakpoint } from '../../../hooks/useBreakpoint'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INVERSIONES
@@ -24,6 +26,7 @@ export default function Inversiones() {
   const [confirm, setConfirm] = useState(null)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const { isCompact } = useBreakpoint()
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filtCat, setFiltCat] = useState('')
@@ -187,6 +190,20 @@ export default function Inversiones() {
 
       <div className="border-t border-surface-700/60" />
 
+      {/* Mobile/tablet (≤ 1024px): patrón único de filtros (buscador + botón «Filtros» + panel).
+          Desktop: barra inline original, aplicación inmediata (sin cambios). */}
+      {isCompact ? (
+        <FiltrosGestionMovil
+          search={search} onSearch={setSearch} placeholder="Buscar por ID o descripción…"
+          valores={{ desde: dateFrom, hasta: dateTo, categoria: filtCat }}
+          onApply={(b) => { setDateFrom(b.desde); setDateTo(b.hasta); setFiltCat(b.categoria) }}
+          selects={[{ clave: 'categoria', etiqueta: 'Categoría', opciones: opcionesTodas(CATEGORIAS_INV, 'Todas') }]}
+          acciones={<>
+            <Button icon={ArrowDownCircle} variant="secondary" onClick={abrirRetiro}>Registrar retiro</Button>
+            <Button icon={Plus} onClick={openCreate} className="bg-teal-600/80 hover:bg-teal-500/90 border-teal-500/50 text-white">Nueva inversión</Button>
+          </>}
+        />
+      ) : (
       <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center w-full">
         <div className="flex-1 min-w-[160px]">
           <input type="text" value={search} onChange={e => setSearch(e.target.value)}
@@ -204,6 +221,7 @@ export default function Inversiones() {
         <Button icon={ArrowDownCircle} variant="secondary" onClick={abrirRetiro}>Registrar retiro</Button>
         <Button icon={Plus} onClick={openCreate} className="bg-teal-600/80 hover:bg-teal-500/90 border-teal-500/50 text-white">Nueva inversión</Button>
       </div>
+      )}
 
       <div ref={tableAnchorRef}>
       <Card>

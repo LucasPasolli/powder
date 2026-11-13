@@ -5,9 +5,15 @@ import Presupuestador from './Presupuestador'
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
 import DateField from '../components/ui/DateField'
+import FiltrosMovil, { BuscadorListado, mensajeRangoInvalido } from '../components/ui/FiltrosMovil'
+import PaginadorListado from '../components/ui/PaginadorListado'
+import { useBreakpoint } from '../hooks/useBreakpoint'
+import {
+  esFiltroContado, metodoCompatibleConEstado, estadoCompatibleConMetodo, reconciliarMetodoEstado,
+} from '../lib/historialFiltros'
 import { ALTO_CONTROL } from '../components/ui/controles'
 import {
-  Search, ChevronDown, ChevronUp, ArrowLeft, FileText,
+  Search, ChevronDown, ChevronUp, ArrowLeft, FileText, Eye, AlertTriangle,
   Clock, CheckCircle2, XCircle, ThumbsUp, AlertCircle, Trash2, Download, Pencil, X, Wallet, Tag
 } from 'lucide-react'
 import {
@@ -32,6 +38,7 @@ import { registrarPagoSplit, obtenerPagoSplit, obtenerSplitsPorPresupuestos, Err
 import { esMetodoElegibleSplit, ETIQUETA_METODO, METODOS_SPLIT, fmtPct } from '../lib/pagoSplit'
 import { useDebounce } from '../hooks/useDebounce'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
+import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { derivarFactorAjustable, tienePromocion } from '../lib/calculoPresupuesto'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -51,8 +58,7 @@ const METODOS_FILTRO = {
   cc15:          METODOS_PAGO.cc15,
   cc30:          METODOS_PAGO.cc30,
 }
-// Cobro de contado (nunca pasa por Cuenta Corriente): efectivo, transferencia o split.
-const esFiltroContado = (m) => m === 'efectivo' || m === 'transferencia' || m === 'split'
+// (Las reglas método ↔ estado de los filtros viven en lib/historialFiltros.js)
 const ESTADOS = {
   borrador:  { label: 'Borrador',  color: 'gray'  },
   aprobado:  { label: 'Aprobado',  color: 'blue'  },
@@ -99,44 +105,243 @@ const METODOS_FACTOR = {
   cc30:          1.105,
 }
 
-// ─── Skeleton de fila (tabla ≥ md) ─────────────────────────────────────────
-// Muestra filas "fantasma" con animate-pulse mientras se carga la data.
-// Evita el parpadeo / tabla-vacía que da sensación de lentitud.
-function SkeletonRows({ count = 8 }) {
-  const widths = ['w-12', 'w-20', 'w-40', 'w-24', 'w-20', 'w-24', 'w-16', 'w-8']
+// ─── Listado (mismo layout que Saldos) ─────────────────────────────────────
+// Mobile (< md): grilla de tarjetas (1 col, 2 desde sm) con acción explícita «Ver detalle».
+// Tablet/Desktop (≥ md): tabla con la misma estructura, caption y área táctil que Saldos.
+// Estados: cargando (skeleton), error (reintentar) y vacío (limpiar filtros).
+
+/** Deriva lo que fila y tarjeta necesitan, en un solo lugar (DRY). */
+function derivarPresupuesto(p) {
+  const esCC = p.metodoPago === 'cc15' || p.metodoPago === 'cc30'
+  const nombre = p.nombreCliente ? `${p.nombreCliente} ${p.apellidoCliente ?? ''}`.trim() : ''
+  return {
+    m: METODOS_PAGO[p.metodoPago] ?? { label: p.metodoPago, badge: 'gray' },
+    e: ESTADOS[p.estado] ?? ESTADOS.borrador,
+    nombre: nombre || `Cliente #${p.idCliente}`,
+    // CC aprobado sin saldo: se eliminó el saldo pagado (o se revirtió su pago). Es un estado
+    // transitorio válido, pero sin esta señal se ve igual que un presupuesto en efectivo sin saldo.
+    necesitaReactivar: !p.saldoEstado && esCC && p.estado === 'aprobado',
+  }
+}
+
+function ListSkeleton() {
   return (
-    <>
-      {Array.from({ length: count }).map((_, i) => (
-        <tr key={i} className="border-b border-surface-700/50">
-          {widths.map((w, j) => (
-            <td key={j} className="py-3 px-4">
-              <div className={`h-4 ${w} bg-surface-700 rounded animate-pulse`} />
-            </td>
-          ))}
-        </tr>
+    <div role="status" className="p-3 grid gap-3 sm:grid-cols-2 md:grid-cols-1">
+      <span className="sr-only">Cargando presupuestos…</span>
+      {Array.from({ length: 4 }, (_, i) => (
+        <div key={i} aria-hidden="true" className="h-28 md:h-14 rounded-xl bg-surface-700/50 animate-pulse" />
       ))}
-    </>
+    </div>
   )
 }
 
-// ─── Skeleton de tarjeta (< md) ─────────────────────────────────────────────
-// Contraparte de SkeletonRows para la vista de tarjetas mobile/tablet chico.
-function SkeletonCards({ count = 5 }) {
+function ListError({ onRetry }) {
   return (
-    <div className="flex flex-col gap-3 p-3" aria-hidden="true">
-      {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="rounded-xl border border-surface-700 bg-surface-800/60 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="h-4 w-16 bg-surface-700 rounded animate-pulse" />
-            <div className="h-4 w-20 bg-surface-700 rounded animate-pulse" />
-          </div>
-          <div className="h-4 w-2/3 bg-surface-700 rounded animate-pulse" />
-          <div className="flex gap-2">
-            <div className="h-5 w-16 bg-surface-700 rounded-full animate-pulse" />
-            <div className="h-5 w-20 bg-surface-700 rounded-full animate-pulse" />
-          </div>
+    <div role="alert" className="flex flex-col items-center py-12 px-4 gap-3 text-center">
+      <AlertTriangle size={28} className="text-red-400" aria-hidden="true" />
+      <p className="text-surface-300 text-sm font-body">No pudimos cargar los presupuestos. Revisá tu conexión e intentá de nuevo.</p>
+      <Button variant="secondary" className="min-h-[44px]" onClick={onRetry}>Reintentar</Button>
+    </div>
+  )
+}
+
+function EmptyState({ hayFiltros, onClear }) {
+  return (
+    <div className="flex flex-col items-center py-16 px-4 gap-3 text-surface-500 text-center">
+      <Clock size={32} className="opacity-30" aria-hidden="true" />
+      <p className="font-body text-sm">No hay presupuestos que coincidan.</p>
+      {hayFiltros && (
+        <Button variant="secondary" className="min-h-[44px]" onClick={onClear}>Limpiar filtros</Button>
+      )}
+    </div>
+  )
+}
+
+function MetodoBadges({ p, m }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {p.split
+        ? <Badge color="violet">Split Payment</Badge>
+        : <Badge color={BADGE[m.badge]}>{m.label}</Badge>}
+      {p.esExcepcion === 1 && <Badge color="violet">Exc.</Badge>}
+    </div>
+  )
+}
+
+function SaldoEstado({ p, necesitaReactivar }) {
+  if (p.saldoEstado === 'pendiente') {
+    return (
+      <div className="flex flex-col gap-0.5 items-start">
+        <Badge color="yellow">Pendiente</Badge>
+        {p.saldoFechaVto && <span className="text-surface-500 text-[10px] font-mono">Vto. {fmtFecha(p.saldoFechaVto)}</span>}
+      </div>
+    )
+  }
+  if (p.saldoEstado === 'pagado') {
+    return (
+      <div className="flex flex-col gap-0.5 items-start">
+        <Badge color="green">Cobrado</Badge>
+        {p.saldoFechaPago && <span className="text-surface-500 text-[10px] font-mono">{fmtFecha(p.saldoFechaPago)}</span>}
+      </div>
+    )
+  }
+  if (necesitaReactivar) {
+    return (
+      <div className="flex items-center gap-1" title="El saldo fue eliminado — reactivá el cobro desde el detalle del presupuesto">
+        <AlertCircle size={12} className="text-yellow-400 shrink-0" aria-hidden="true" />
+        <span className="text-yellow-400/90 text-[11px] font-body">Reactivar cobro</span>
+      </div>
+    )
+  }
+  return <span className="text-surface-600 text-xs">—</span>
+}
+
+/** Vista de tarjeta (< md): toda la información clave + acción explícita. */
+function PresupuestoCard({ presupuesto: p, onOpen }) {
+  const v = derivarPresupuesto(p)
+  return (
+    <article onClick={() => onOpen(p)}
+      className="h-full flex flex-col gap-3 bg-surface-700/40 border border-surface-700 rounded-xl p-4
+                 cursor-pointer active:bg-surface-700/70 transition-colors">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-white text-sm font-body font-medium leading-tight break-words">{v.nombre}</p>
+          <p className="text-surface-400 text-xs font-mono mt-1">
+            <span className="text-brand-400 font-bold">#{p.idPresupuesto}</span> · {fmtFecha(p.fecha)}
+          </p>
         </div>
+        <div className="flex-shrink-0"><Badge color={BADGE[v.e.color]}>{v.e.label}</Badge></div>
+      </div>
+
+      <p className="text-white font-mono font-medium text-xl">{fmt(p.monto)}</p>
+
+      <dl className="grid grid-cols-2 gap-3 text-xs font-body">
+        <div>
+          <dt className="text-surface-500">Método</dt>
+          <dd className="mt-1"><MetodoBadges p={p} m={v.m} /></dd>
+        </div>
+        <div>
+          <dt className="text-surface-500">Saldo</dt>
+          <dd className="mt-1"><SaldoEstado p={p} necesitaReactivar={v.necesitaReactivar} /></dd>
+        </div>
+      </dl>
+
+      <Button variant="secondary" icon={Eye} className="w-full min-h-[44px] mt-auto"
+        aria-label={`Ver presupuesto ${p.idPresupuesto}`}
+        onClick={(e) => { e.stopPropagation(); onOpen(p) }}>
+        Ver detalle
+      </Button>
+    </article>
+  )
+}
+
+function PresupuestosCardList({ items, onOpen }) {
+  return (
+    <ul className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-3 p-3">
+      {items.map(p => (
+        <li key={p.idPresupuesto}><PresupuestoCard presupuesto={p} onOpen={onOpen} /></li>
       ))}
+    </ul>
+  )
+}
+
+function SortIcon({ col, sortKey, sortDir }) {
+  if (sortKey !== col) return <span className="text-surface-600 ml-1" aria-hidden="true">↕</span>
+  return sortDir === 'asc'
+    ? <ChevronUp size={13} className="inline ml-1" aria-hidden="true" />
+    : <ChevronDown size={13} className="inline ml-1" aria-hidden="true" />
+}
+
+const TH = 'text-left text-surface-400 text-xs tracking-widest uppercase py-3 px-3 font-body'
+
+function PresupuestoRow({ presupuesto: p, onOpen }) {
+  const v = derivarPresupuesto(p)
+  return (
+    <tr onClick={() => onOpen(p)}
+      className="border-b border-surface-700/50 hover:bg-surface-700/40 active:bg-surface-700/60 cursor-pointer transition-colors">
+      <td className="py-1 px-3">
+        {/* Botón real: da acceso por teclado y lectores de pantalla (la fila sola no lo tiene) */}
+        <button type="button" aria-label={`Ver presupuesto ${p.idPresupuesto}`}
+          onClick={(e) => { e.stopPropagation(); onOpen(p) }}
+          className="min-h-[44px] min-w-[44px] text-left text-brand-400 font-mono text-sm font-bold rounded
+                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
+          #{p.idPresupuesto}
+        </button>
+      </td>
+      <td className="py-3 px-3 text-surface-300 font-mono text-xs">{fmtFecha(p.fecha)}</td>
+      <td className="py-3 px-3"><p className="text-white text-sm font-body leading-tight">{v.nombre}</p></td>
+      <td className="py-3 px-3"><MetodoBadges p={p} m={v.m} /></td>
+      <td className="py-3 px-3"><Badge color={BADGE[v.e.color]}>{v.e.label}</Badge></td>
+      <td className="py-3 px-3 text-white font-mono font-medium">{fmt(p.monto)}</td>
+      <td className="py-3 px-3"><SaldoEstado p={p} necesitaReactivar={v.necesitaReactivar} /></td>
+      <td className="py-3 px-3 text-surface-500"><FileText size={14} aria-hidden="true" /></td>
+    </tr>
+  )
+}
+
+// ID y Fecha ordenan al hacer clic (comportamiento que ya tenía la tabla); ahora con botón real.
+function ThOrdenable({ col, children, sortKey, sortDir, onSort }) {
+  const ariaSort = sortKey === col ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'
+  return (
+    <th scope="col" aria-sort={ariaSort} className={TH}>
+      <button type="button" onClick={() => onSort(col)}
+        className="inline-flex items-center gap-1 uppercase tracking-widest hover:text-white transition-colors
+                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 rounded">
+        {children}<SortIcon col={col} sortKey={sortKey} sortDir={sortDir} />
+      </button>
+    </th>
+  )
+}
+
+function PresupuestosTable({ items, onOpen, sortKey, sortDir, onSort }) {
+  const orden = { sortKey, sortDir, onSort }
+  return (
+    <div className="hidden md:block overflow-x-auto">
+      <table className="w-full text-sm font-body">
+        <caption className="sr-only">Listado de presupuestos</caption>
+        <thead>
+          <tr className="border-b border-surface-700">
+            <ThOrdenable col="id" {...orden}>ID</ThOrdenable>
+            <ThOrdenable col="fecha" {...orden}>Fecha</ThOrdenable>
+            {['Cliente', 'Método', 'Estado', 'Total', 'Saldo'].map(h => (
+              <th key={h} scope="col" className={TH}>{h}</th>
+            ))}
+            <th scope="col" className={TH}><span className="sr-only">Acciones</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(p => <PresupuestoRow key={p.idPresupuesto} presupuesto={p} onOpen={onOpen} />)}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// Fila de la tarjeta de totales: etiqueta a la izquierda, monto a la derecha.
+//  · La etiqueta puede ocupar varias líneas (`min-w-0`): con etiquetas largas, como
+//    "Ajuste por método de pago [Excepción]:", cede espacio en lugar de empujar el monto.
+//  · El monto NUNCA se parte ni se corta (`shrink-0` + `whitespace-nowrap`).
+//  · Antes la etiqueta era `shrink-0` y el monto no estaba protegido: etiqueta + `gap-8`
+//    + monto superaban el ancho mobile y el monto se salía de la tarjeta.
+// En desktop (contenedor `sm:w-fit`) cada fila mide su contenido, así que no se ajusta nada.
+function FilaTotal({ etiqueta, valor, alineacion = 'items-start', className = '', etiquetaClassName = '', valorClassName = '' }) {
+  return (
+    <div className={`flex justify-between ${alineacion} gap-x-3 sm:gap-x-8 ${className}`}>
+      <span className={`min-w-0 ${etiquetaClassName}`}>{etiqueta}</span>
+      <span className={`shrink-0 whitespace-nowrap text-right ${valorClassName}`}>{valor}</span>
+    </div>
+  )
+}
+
+// Cuadro de información de la cabecera del detalle (Fecha · Cliente · Método).
+// Única fuente de padding, radio, color y estilo de la etiqueta: los tres cuadros
+// no pueden divergir. `min-w-0` permite que el contenido largo se ajuste dentro
+// del cuadro en lugar de ensancharlo (un ítem de grilla tiene min-width:auto).
+function CuadroInfo({ etiqueta, className = '', children }) {
+  return (
+    <div className={`min-w-0 bg-surface-700 rounded-xl p-4 ${className}`}>
+      <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">{etiqueta}</p>
+      {children}
     </div>
   )
 }
@@ -402,45 +607,49 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-          <div className="bg-surface-700 rounded-xl p-4">
-            <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Fecha</p>
+        {/* Cuadros de información.
+            · Mobile y tablet (≤ 1024 px): UNA columna → Fecha, Cliente y Método ocupan
+              exactamente el mismo ancho y comparten borde izquierdo y derecho; sólo el
+              alto varía con el contenido. (Antes, `col-span-2` en una grilla de 1 columna
+              creaba una 2.ª columna implícita y los anchos se desparejaban.)
+            · Desktop (≥ 1025 px, mismo umbral que AppShell/useBreakpoint): grilla original
+              de 4 columnas con Cliente a doble ancho. */}
+        <div className="grid grid-cols-1 min-[1025px]:grid-cols-4 gap-3 sm:gap-4">
+          <CuadroInfo etiqueta="Fecha">
             <p className="text-white text-sm font-mono">{fmtFecha(pres.fecha)}</p>
-          </div>
-          <div className="bg-surface-700 rounded-xl p-4 col-span-2">
-            <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Cliente</p>
+          </CuadroInfo>
+          <CuadroInfo etiqueta="Cliente" className="min-[1025px]:col-span-2">
             {cliente
               ? <>
-                  <p className="text-white text-sm font-body font-medium">{cliente.nombre} {cliente.apellido}</p>
-                  <p className="text-surface-400 text-xs font-mono mt-0.5">
+                  <p className="text-white text-sm font-body font-medium break-words">{cliente.nombre} {cliente.apellido}</p>
+                  <p className="text-surface-400 text-xs font-mono mt-0.5 break-words">
                     ID #{cliente.idCliente}{cliente.telefono ? ` · ${cliente.telefono}` : ''}
                   </p>
                 </>
               : <>
-                  <p className="text-white text-sm font-body font-medium">
+                  <p className="text-white text-sm font-body font-medium break-words">
                     {pres.nombreCliente ? `${pres.nombreCliente} ${pres.apellidoCliente ?? ''}`.trim() : `ID #${pres.idCliente}`}
                   </p>
-                  <p className="text-surface-500 text-xs font-mono mt-0.5">Cliente eliminado · ID #{pres.idCliente}</p>
+                  <p className="text-surface-500 text-xs font-mono mt-0.5 break-words">Cliente eliminado · ID #{pres.idCliente}</p>
                 </>
             }
-          </div>
-          <div className="bg-surface-700 rounded-xl p-4">
-            <p className="text-surface-400 text-xs uppercase tracking-widest font-body mb-1">Método</p>
-            <p className="text-white text-sm font-body">
+          </CuadroInfo>
+          <CuadroInfo etiqueta="Método">
+            <p className="text-white text-sm font-body break-words">
               {(() => {
                 const etiqueta = pagoSplit ? 'Split Payment' : metodo.label
                 return esExcepcion ? `Excepción (${etiqueta})` : etiqueta
               })()}
             </p>
             {pagoSplit && (
-              <p className="text-surface-400 text-xs font-mono mt-0.5 tabular-nums">
+              <p className="text-surface-400 text-xs font-mono mt-0.5 tabular-nums break-words">
                 {METODOS_SPLIT.map((m) => `${ETIQUETA_METODO[m]} ${fmtPct(pagoSplit[m].porcentaje)}`).join(' · ')}
               </p>
             )}
             <p className={`text-xs font-mono mt-0.5 ${factorReal < 1 ? 'text-emerald-400' : factorReal > 1 ? 'text-red-400' : 'text-surface-500'}`}>
               {ajusteLabel}
             </p>
-          </div>
+          </CuadroInfo>
         </div>
 
         {/* Acciones */}
@@ -596,42 +805,50 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
       {/* Totales — ahora usa totalesDetalle memoizado */}
       <Card className="p-6">
         <div className="w-full sm:ml-auto sm:w-fit sm:min-w-[280px] space-y-2 text-sm font-body">
-          <div className="flex justify-between gap-8">
-            <span className="text-surface-400 shrink-0">Subtotal (lista):</span>
-            <span className="text-surface-200 font-mono text-right">{fmt(totalesDetalle.precioLista)}</span>
-          </div>
+          <FilaTotal
+            etiqueta="Subtotal (lista):"
+            etiquetaClassName="text-surface-400"
+            valor={fmt(totalesDetalle.precioLista)}
+            valorClassName="text-surface-200 font-mono"
+          />
           {totalesDetalle.ahorroPromo > 0.01 && (
             <>
-              <div className="flex justify-between gap-8 items-center">
-                <span className="flex items-center gap-1.5 text-emerald-400 shrink-0">
-                  <Tag size={11} />Ahorro por promociones:
-                </span>
-                <span className="text-emerald-400 font-mono font-medium text-right">− {fmt(totalesDetalle.ahorroPromo)}</span>
-              </div>
-              <div className="flex justify-between gap-8">
-                <span className="text-surface-400 shrink-0">Subtotal con promos:</span>
-                <span className="text-surface-200 font-mono text-right">{fmt(totalesDetalle.subtotalConPromo)}</span>
-              </div>
+              <FilaTotal
+                alineacion="items-center"
+                etiqueta={<span className="flex items-center gap-1.5"><Tag size={11} className="shrink-0" />Ahorro por promociones:</span>}
+                etiquetaClassName="text-emerald-400"
+                valor={`− ${fmt(totalesDetalle.ahorroPromo)}`}
+                valorClassName="text-emerald-400 font-mono font-medium"
+              />
+              <FilaTotal
+                etiqueta="Subtotal con promos:"
+                etiquetaClassName="text-surface-400"
+                valor={fmt(totalesDetalle.subtotalConPromo)}
+                valorClassName="text-surface-200 font-mono"
+              />
             </>
           )}
-          <div className="flex justify-between gap-8">
-            <span className="text-surface-400 shrink-0">
+          <FilaTotal
+            etiqueta={<>
               Ajuste por método de pago
               {esExcepcion && totalesDetalle.ajusteMetodo !== 0 && (
-                <span className="ml-1 text-xs text-violet-400 font-body">[Excepción]</span>
+                <span className="ml-1 whitespace-nowrap text-xs text-violet-400 font-body">[Excepción]</span>
               )}:
-            </span>
-            <span className={`font-mono font-medium text-right ${
+            </>}
+            etiquetaClassName="text-surface-400"
+            valor={Math.abs(totalesDetalle.ajusteMetodo) < 0.01 ? '—'
+              : totalesDetalle.ajusteMetodo < 0 ? `- ${fmt(Math.abs(totalesDetalle.ajusteMetodo))}` : `+ ${fmt(totalesDetalle.ajusteMetodo)}`}
+            valorClassName={`font-mono font-medium ${
               Math.abs(totalesDetalle.ajusteMetodo) < 0.01 ? 'text-surface-400'
-              : totalesDetalle.ajusteMetodo < 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {Math.abs(totalesDetalle.ajusteMetodo) < 0.01 ? '—'
-                : totalesDetalle.ajusteMetodo < 0 ? `- ${fmt(Math.abs(totalesDetalle.ajusteMetodo))}` : `+ ${fmt(totalesDetalle.ajusteMetodo)}`}
-            </span>
-          </div>
-          <div className="border-t border-surface-700 pt-2 flex justify-between gap-8">
-            <span className="text-white font-semibold shrink-0">Total:</span>
-            <span className="text-brand-400 font-mono font-bold text-lg text-right">{fmt(pres.monto)}</span>
-          </div>
+              : totalesDetalle.ajusteMetodo < 0 ? 'text-emerald-400' : 'text-red-400'}`}
+          />
+          <FilaTotal
+            className="border-t border-surface-700 pt-2"
+            etiqueta="Total:"
+            etiquetaClassName="text-white font-semibold"
+            valor={fmt(pres.monto)}
+            valorClassName="text-brand-400 font-mono font-bold text-lg"
+          />
         </div>
       </Card>
 
@@ -853,11 +1070,38 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
   )
 }
 
+// ─── Filtros del panel móvil ───────────────────────────────────────────────
+
+const FILTROS_PANEL_DEFAULT = Object.freeze({
+  metodo: 'all', estado: 'all', soloExcepcion: false, desde: '', hasta: '',
+})
+
+const TODOS = { value: 'all', label: 'Todos' }
+const aOpciones = (dic, permitido) =>
+  Object.entries(dic).filter(([v]) => permitido(v)).map(([v, m]) => ({ value: v, label: m.label }))
+
+const CAMPOS_FILTROS_MOVIL = [
+  { tipo: 'select', clave: 'metodo', etiqueta: 'Método de pago',
+    opciones: (b) => [TODOS, ...aOpciones(METODOS_FILTRO, (v) => metodoCompatibleConEstado(v, b.estado))] },
+  { tipo: 'select', clave: 'estado', etiqueta: 'Estado',
+    opciones: (b) => [TODOS, ...aOpciones(ESTADOS, (v) => estadoCompatibleConMetodo(v, b.metodo))] },
+  { tipo: 'checkbox', clave: 'soloExcepcion', etiqueta: 'Excepciones', texto: 'Solo excepciones' },
+  { tipo: 'fecha', clave: 'desde', etiqueta: 'Desde', max: (b) => b.hasta || undefined },
+  { tipo: 'fecha', clave: 'hasta', etiqueta: 'Hasta', min: (b) => b.desde || undefined },
+]
+
+/** Mantiene coherente el par método/estado dentro del borrador (misma regla que en escritorio). */
+const alCambiarFiltroMovil = (clave, _valor, siguiente) =>
+  clave === 'metodo' || clave === 'estado' ? { ...siguiente, ...reconciliarMetodoEstado(clave, siguiente) } : siguiente
+
+const validarFiltrosMovil = (b) => mensajeRangoInvalido(b.desde, b.hasta)
+
 // ─── Lista ─────────────────────────────────────────────────────────────────
 
 export default function Historial() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { isCompact } = useBreakpoint()   // mobile/tablet: filtros en panel; escritorio: barra inline
 
   // ── Filtros ──────────────────────────────────────────────────────────────
   const [search,        setSearch]        = useState('')
@@ -879,10 +1123,14 @@ export default function Historial() {
   // ── Data y estado de carga ────────────────────────────────────────────────
   const [presupuestos, setPresupuestos] = useState([])
   const [loading,      setLoading]      = useState(true)
+  const [error,        setError]        = useState(false)
 
   // ── Vista activa ──────────────────────────────────────────────────────────
   const [selected, setSelected] = useState(null)
   const [editando, setEditando] = useState(null)
+  // Mobile/tablet: lista → detalle → edición se alternan por estado (sin cambiar la URL);
+  // cada vista nueva debe arrancar desde el inicio. Va antes de los `return` condicionales.
+  useScrollToTopOnView(editando ? `editar:${editando}` : selected ? `detalle:${selected.idPresupuesto}` : 'lista')
 
   // ── Debounce del buscador ─────────────────────────────────────────────────
   // El input actualiza `search` en cada keystroke (fluido para el usuario),
@@ -896,6 +1144,7 @@ export default function Historial() {
   // Cuando cambia un filtro, reseteamos a página 1 (ver useEffect más abajo).
   const load = useCallback(async () => {
     setLoading(true)
+    setError(false)
     try {
       const { data, count } = await obtenerPresupuestos({
         estado:      filterEstado !== 'all' ? filterEstado : null,
@@ -927,6 +1176,7 @@ export default function Historial() {
       setTotalCount(count)
     } catch (err) {
       console.error('[Historial] Error cargando:', err)
+      setError(true)
     } finally {
       setLoading(false)
     }
@@ -970,11 +1220,9 @@ export default function Historial() {
     else { setSortKey(key); setSortDir('desc') }
   }
 
-  function SortIcon({ col }) {
-    if (sortKey !== col) return <span className="text-surface-600 ml-1">↕</span>
-    return sortDir === 'asc'
-      ? <ChevronUp size={13} className="inline ml-1" />
-      : <ChevronDown size={13} className="inline ml-1" />
+  function limpiarFiltros() {
+    setSearch(''); setFilterMetodo('all'); setFilterEstado('all')
+    setSoloExcepcion(false); setFilterFechaD(''); setFilterFechaH('')
   }
 
   async function irADetalle(id) {
@@ -1014,12 +1262,24 @@ export default function Historial() {
       <PageHeader title="Historial" subtitle="Presupuestos emitidos" />
 
       {/* Filtros
-          Mobile (< sm, ~360-430px): grid de 1 columna — cada campo ocupa todo
-          el ancho, texto y controles a 16px (evita el zoom-on-focus de iOS)
-          y alto ≥44px para objetivo táctil (WCAG 2.5.5).
-          Tablet (sm–lg, ~640-1024px): grid de 2 columnas, aprovecha el ancho
-          intermedio sin amontonar ni desproporcionar los controles.
-          Desktop (≥ lg): fila flexible original. */}
+          Mobile/tablet (≤ 1024px): patrón único del sistema — buscador siempre visible +
+          botón «Filtros» que abre el panel con borrador (Limpiar / Aplicar). Ver FiltrosMovil.
+          Desktop (> 1024px): barra inline original, aplicación inmediata. */}
+      {isCompact ? (
+        <FiltrosMovil
+          busqueda={<BuscadorListado value={search} onChange={setSearch}
+            placeholder="Buscar por ID o cliente..." etiqueta="Buscar por ID o cliente" />}
+          value={{ metodo: filterMetodo, estado: filterEstado, soloExcepcion, desde: filterFechaD, hasta: filterFechaH }}
+          defaults={FILTROS_PANEL_DEFAULT}
+          campos={CAMPOS_FILTROS_MOVIL}
+          alCambiar={alCambiarFiltroMovil}
+          validar={validarFiltrosMovil}
+          onApply={(b) => {
+            setFilterMetodo(b.metodo); setFilterEstado(b.estado); setSoloExcepcion(b.soloExcepcion)
+            setFilterFechaD(b.desde); setFilterFechaH(b.hasta)
+          }}
+        />
+      ) : (
       <Card className="p-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap gap-3 lg:items-end">
           <div className="relative sm:col-span-2 lg:col-span-1 lg:flex-1 lg:min-w-[180px]">
@@ -1033,58 +1293,31 @@ export default function Historial() {
                          transition-all`} />
           </div>
 
-          {(() => {
-            const metodosFiltrados = Object.entries(METODOS_FILTRO).filter(([v]) => {
-              const esCC = v === 'cc15' || v === 'cc30'
-              if (filterEstado === 'pagado'   && esCC)  return false
-              if (filterEstado === 'aprobado' && !esCC) return false
-              return true
-            })
-            return (
-              <select value={filterMetodo} onChange={e => {
-                const nuevoMetodo = e.target.value
-                setFilterMetodo(nuevoMetodo)
-                const nuevoEsCC          = nuevoMetodo === 'cc15' || nuevoMetodo === 'cc30'
-                const nuevoEsEfectTransf = esFiltroContado(nuevoMetodo)
-                if (nuevoEsCC          && filterEstado === 'pagado')   setFilterEstado('all')
-                if (nuevoEsEfectTransf && filterEstado === 'aprobado') setFilterEstado('all')
-              }}
-                aria-label="Filtrar por método de pago"
-                className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
-                           text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
-                           cursor-pointer`}>
-                <option value="all">Todos los métodos</option>
-                {metodosFiltrados.map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
-              </select>
-            )
-          })()}
+          <select value={filterMetodo} onChange={e => {
+            const sig = reconciliarMetodoEstado('metodo', { metodo: e.target.value, estado: filterEstado })
+            setFilterMetodo(sig.metodo); setFilterEstado(sig.estado)
+          }}
+            aria-label="Filtrar por método de pago"
+            className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
+                       text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
+                       cursor-pointer`}>
+            <option value="all">Todos los métodos</option>
+            {aOpciones(METODOS_FILTRO, v => metodoCompatibleConEstado(v, filterEstado))
+              .map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
 
-          {(() => {
-            const esCC          = filterMetodo === 'cc15' || filterMetodo === 'cc30'
-            const esEfectTransf = esFiltroContado(filterMetodo)
-            const estadosFiltrados = Object.entries(ESTADOS).filter(([v]) => {
-              if (v === 'pagado'   && esCC)          return false
-              if (v === 'aprobado' && esEfectTransf) return false
-              return true
-            })
-            return (
-              <select value={filterEstado} onChange={e => {
-                const nuevoEstado = e.target.value
-                setFilterEstado(nuevoEstado)
-                const metodoEsCC          = filterMetodo === 'cc15' || filterMetodo === 'cc30'
-                const metodoEsEfectTransf = esFiltroContado(filterMetodo)
-                if (nuevoEstado === 'pagado'   && metodoEsCC)          setFilterMetodo('all')
-                if (nuevoEstado === 'aprobado' && metodoEsEfectTransf) setFilterMetodo('all')
-              }}
-                aria-label="Filtrar por estado"
-                className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
-                           text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
-                           cursor-pointer`}>
-                <option value="all">Todos los estados</option>
-                {estadosFiltrados.map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
-              </select>
-            )
-          })()}
+          <select value={filterEstado} onChange={e => {
+            const sig = reconciliarMetodoEstado('estado', { metodo: filterMetodo, estado: e.target.value })
+            setFilterMetodo(sig.metodo); setFilterEstado(sig.estado)
+          }}
+            aria-label="Filtrar por estado"
+            className={`w-full lg:w-auto ${ALTO_CONTROL} bg-surface-700 border border-surface-600 rounded-xl px-3
+                       text-white text-base sm:text-sm font-body focus:outline-none focus:border-brand-500
+                       cursor-pointer`}>
+            <option value="all">Todos los estados</option>
+            {aOpciones(ESTADOS, v => estadoCompatibleConMetodo(v, filterMetodo))
+              .map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
 
           <label className={`flex items-center gap-2.5 cursor-pointer select-none bg-surface-700 border border-surface-600
                              rounded-xl px-3 ${ALTO_CONTROL} transition-all hover:border-surface-500`}>
@@ -1098,10 +1331,7 @@ export default function Historial() {
 
           {hasAnyFilter && (
             <button
-              onClick={() => {
-                setSearch(''); setFilterMetodo('all'); setFilterEstado('all')
-                setSoloExcepcion(false); setFilterFechaD(''); setFilterFechaH('')
-              }}
+              onClick={limpiarFiltros}
               className={`flex items-center justify-center gap-2 bg-surface-700 border border-surface-600 rounded-xl
                          px-3 ${ALTO_CONTROL} w-full sm:col-span-2 lg:col-span-1 lg:w-auto
                          text-surface-300 text-sm font-body hover:border-red-500/50 hover:text-red-400
@@ -1111,205 +1341,31 @@ export default function Historial() {
           )}
         </div>
       </Card>
+      )}
 
-      {/* Resultados
-          Mobile (< md, ~360-430px): vista de tarjetas — un registro por
-          tarjeta, sin scroll horizontal, tarjeta entera como objetivo táctil
-          (≥44px) para "ver". Acciones como Editar viven en el detalle.
-          Tablet/Desktop (≥ md, ~768px+): tabla original, con scroll
-          horizontal contenido como resguardo. */}
+      {/* Resultados — mismo layout que Saldos: tarjetas (< md) · tabla (≥ md) */}
       <div ref={tableAnchorRef}>
-      <Card className="overflow-hidden">
-
-        {/* ── Tabla: tablet/desktop ── */}
-        <div className="hidden md:block overflow-x-auto">
-          <table className="w-full text-sm font-body">
-            <thead>
-              <tr className="border-b border-surface-700">
-                <th className="text-left text-surface-400 text-xs tracking-widest uppercase py-3 px-4 font-body cursor-pointer hover:text-white transition-colors"
-                  onClick={() => toggleSort('id')}>
-                  <div className="flex items-center gap-1">ID <SortIcon col="id" /></div>
-                </th>
-                <th className="text-left text-surface-400 text-xs tracking-widest uppercase py-3 px-4 font-body cursor-pointer hover:text-white transition-colors"
-                  onClick={() => toggleSort('fecha')}>
-                  <div className="flex items-center gap-1">Fecha <SortIcon col="fecha" /></div>
-                </th>
-                {['Cliente','Método','Estado','Total','Saldo',''].map(h => (
-                  <th key={h} className="text-left text-surface-400 text-xs tracking-widest uppercase py-3 px-4 font-body">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {/* Skeleton mientras carga — reemplaza el "tabla vacía" anterior */}
-              {loading
-                ? <SkeletonRows count={PAGE_SIZE > 8 ? 8 : PAGE_SIZE} />
-                : presupuestos.map(p => {
-                    const m = METODOS_PAGO[p.metodoPago] ?? { label: p.metodoPago, badge: 'gray' }
-                    const e = ESTADOS[p.estado] ?? ESTADOS.borrador
-                    return (
-                      <tr key={p.idPresupuesto} onClick={() => setSelected(p)}
-                        className="border-b border-surface-700/50 hover:bg-surface-700/40 cursor-pointer transition-colors">
-                        <td className="py-3 px-4 text-brand-400 font-mono text-sm font-bold">#{p.idPresupuesto}</td>
-                        <td className="py-3 px-4 text-surface-300 font-mono text-xs">{fmtFecha(p.fecha)}</td>
-                        <td className="py-3 px-4 text-white font-body">
-                          {p.nombreCliente
-                            ? `${p.nombreCliente} ${p.apellidoCliente ?? ''}`
-                            : <span className="text-surface-500 font-mono text-xs">#{p.idCliente}</span>}
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-1">
-                            {p.split
-                              ? <Badge color="violet">Split Payment</Badge>
-                              : <Badge color={BADGE[m.badge]}>{m.label}</Badge>}
-                            {p.esExcepcion === 1 && <Badge color="violet">Exc.</Badge>}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4"><Badge color={BADGE[e.color]}>{e.label}</Badge></td>
-                        <td className="py-3 px-4 text-white font-mono font-medium">{fmt(p.monto)}</td>
-                        <td className="py-3 px-4">
-                          {p.saldoEstado === 'pendiente' && (
-                            <div className="flex flex-col gap-0.5">
-                              <Badge color="yellow">Pendiente</Badge>
-                              {p.saldoFechaVto && (
-                                <span className="text-surface-500 text-[10px] font-mono">
-                                  Vto. {fmtFecha(p.saldoFechaVto)}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {p.saldoEstado === 'pagado' && (
-                            <div className="flex flex-col gap-0.5">
-                              <Badge color="green">Cobrado</Badge>
-                              {p.saldoFechaPago && (
-                                <span className="text-surface-500 text-[10px] font-mono">
-                                  {fmtFecha(p.saldoFechaPago)}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {/* CC aprobado sin saldo: quedó así porque se eliminó el saldo
-                              pagado (o se revirtió su pago). Es un estado transitorio válido
-                              (Escenario 2 del fix), pero sin esta señal la fila se ve igual
-                              que un presupuesto en efectivo sin saldo — el usuario cree que
-                              "se perdió" en vez de ver que necesita reactivar el cobro. */}
-                          {!p.saldoEstado && (p.metodoPago === 'cc15' || p.metodoPago === 'cc30') && p.estado === 'aprobado' && (
-                            <div className="flex items-center gap-1" title="El saldo fue eliminado — reactivá el cobro desde el detalle del presupuesto">
-                              <AlertCircle size={12} className="text-yellow-400 shrink-0" aria-hidden="true" />
-                              <span className="text-yellow-400/90 text-[11px] font-body">Reactivar cobro</span>
-                            </div>
-                          )}
-                          {!p.saldoEstado && !((p.metodoPago === 'cc15' || p.metodoPago === 'cc30') && p.estado === 'aprobado') && (
-                            <span className="text-surface-600 text-xs">—</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-surface-500"><FileText size={15}/></td>
-                      </tr>
-                    )
-                  })
-              }
-            </tbody>
-          </table>
-        </div>
-
-        {/* ── Tarjetas: mobile ── */}
-        <div className="md:hidden">
-          {loading ? (
-            <SkeletonCards count={PAGE_SIZE > 5 ? 5 : PAGE_SIZE} />
+        <Card className="overflow-hidden">
+          {error ? (
+            <ListError onRetry={load} />
+          ) : loading ? (
+            <ListSkeleton />
+          ) : presupuestos.length === 0 ? (
+            <EmptyState hayFiltros={Boolean(hasAnyFilter)} onClear={limpiarFiltros} />
           ) : (
-            <ul className="divide-y divide-surface-700/50">
-              {presupuestos.map(p => {
-                const m = METODOS_PAGO[p.metodoPago] ?? { label: p.metodoPago, badge: 'gray' }
-                const e = ESTADOS[p.estado] ?? ESTADOS.borrador
-                const necesitaReactivar = !p.saldoEstado && (p.metodoPago === 'cc15' || p.metodoPago === 'cc30') && p.estado === 'aprobado'
-                return (
-                  <li key={p.idPresupuesto}>
-                    {/* Tarjeta completa = objetivo táctil de "Ver detalle", igual que
-                        el click de fila en desktop (Escenario 5: mismo comportamiento). */}
-                    <button type="button" onClick={() => setSelected(p)}
-                      aria-label={`Ver presupuesto ${p.idPresupuesto}`}
-                      className="w-full text-left p-4 min-h-[44px] flex flex-col gap-2.5
-                                 active:bg-surface-700/50 hover:bg-surface-700/40 transition-colors touch-manipulation">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-brand-400 font-mono text-sm font-bold">#{p.idPresupuesto}</span>
-                        <span className="text-surface-400 font-mono text-xs">{fmtFecha(p.fecha)}</span>
-                      </div>
-
-                      <p className="text-white text-sm font-body truncate">
-                        {p.nombreCliente
-                          ? `${p.nombreCliente} ${p.apellidoCliente ?? ''}`
-                          : <span className="text-surface-500 font-mono text-xs">Cliente #{p.idCliente}</span>}
-                      </p>
-
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge color={BADGE[e.color]}>{e.label}</Badge>
-                        {p.split
-                              ? <Badge color="violet">Split Payment</Badge>
-                              : <Badge color={BADGE[m.badge]}>{m.label}</Badge>}
-                        {p.esExcepcion === 1 && <Badge color="violet">Exc.</Badge>}
-                      </div>
-
-                      <div className="flex items-end justify-between gap-2 pt-1">
-                        <div>
-                          {p.saldoEstado === 'pendiente' && (
-                            <div className="flex flex-col gap-0.5">
-                              <Badge color="yellow">Pendiente</Badge>
-                              {p.saldoFechaVto && (
-                                <span className="text-surface-500 text-[10px] font-mono">Vto. {fmtFecha(p.saldoFechaVto)}</span>
-                              )}
-                            </div>
-                          )}
-                          {p.saldoEstado === 'pagado' && (
-                            <div className="flex flex-col gap-0.5">
-                              <Badge color="green">Cobrado</Badge>
-                              {p.saldoFechaPago && (
-                                <span className="text-surface-500 text-[10px] font-mono">{fmtFecha(p.saldoFechaPago)}</span>
-                              )}
-                            </div>
-                          )}
-                          {necesitaReactivar && (
-                            <div className="flex items-center gap-1" title="El saldo fue eliminado — reactivá el cobro desde el detalle del presupuesto">
-                              <AlertCircle size={12} className="text-yellow-400 shrink-0" aria-hidden="true" />
-                              <span className="text-yellow-400/90 text-[11px] font-body">Reactivar cobro</span>
-                            </div>
-                          )}
-                          {!p.saldoEstado && !necesitaReactivar && (
-                            <span className="text-surface-600 text-xs">—</span>
-                          )}
-                        </div>
-                        <span className="text-white font-mono font-semibold text-base">{fmt(p.monto)}</span>
-                      </div>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+            <>
+              <PresupuestosCardList items={presupuestos} onOpen={setSelected} />
+              <PresupuestosTable items={presupuestos} onOpen={setSelected}
+                sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            </>
           )}
-        </div>
 
-        {!loading && presupuestos.length === 0 && (
-          <div className="flex flex-col items-center py-16 gap-3 text-surface-500 px-4 text-center">
-            <Clock size={32} className="opacity-30"/>
-            <p className="font-body text-sm">No hay presupuestos que coincidan.</p>
-          </div>
-        )}
-
-        {/* Paginación — ahora muestra totalCount real del servidor */}
-        {totalPages > 1 && (
-          <div className="flex flex-col sm:flex-row items-center gap-3 sm:justify-between px-4 sm:px-6 py-3 border-t border-surface-700">
-            <p className="text-surface-400 text-xs font-body order-2 sm:order-1">
-              {(page-1)*PAGE_SIZE+1}–{Math.min(page*PAGE_SIZE, totalCount)} de {totalCount}
-            </p>
-            <div className="flex gap-2 w-full sm:w-auto order-1 sm:order-2">
-              <Button size="sm" variant="secondary" className="flex-1 sm:flex-none justify-center min-h-[44px] sm:min-h-0"
-                onClick={() => { setPage(p => Math.max(1, p-1)); scrollToStart() }}
-                disabled={page === 1 || loading}>← Anterior</Button>
-              <Button size="sm" variant="secondary" className="flex-1 sm:flex-none justify-center min-h-[44px] sm:min-h-0"
-                onClick={() => { setPage(p => Math.min(totalPages, p+1)); scrollToStart() }}
-                disabled={page === totalPages || loading}>Siguiente →</Button>
-            </div>
-          </div>
-        )}
-      </Card>
+          {/* Paginación: totalCount real del servidor */}
+          {!error && (
+            <PaginadorListado page={page} totalPages={totalPages} pageSize={PAGE_SIZE} total={totalCount}
+              onChange={(n) => { setPage(n); scrollToStart() }} />
+          )}
+        </Card>
       </div>
     </div>
   )

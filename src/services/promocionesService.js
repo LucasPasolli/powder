@@ -4,44 +4,99 @@
 // reemplazando completamente a src/lib/promociones.js.
 
 import { supabase } from '../lib/supabase'
+import { logger } from '../lib/logger'
+import { CODIGOS, ErrorOperacion, mapearErrorSeguro } from './idempotencia'
+import { normalizarIds } from '../lib/promocionesConfig'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Registra el detalle técnico en el log (estructurado y saneado) y lanza un
+ * ErrorOperacion con un mensaje APTO PARA EL USUARIO. Nunca se propaga
+ * `error.message` crudo de Postgres a la UI (OWASP A05 / CWE-209).
+ */
 function manejarError(operacion, error) {
-  console.error(`[promocionesService] ${operacion}:`, error.message)
-  throw new Error(error.message)
+  logger.error(`promociones.${operacion}`, { error })
+  throw new ErrorOperacion(mapearErrorSeguro(error))
 }
+
+/**
+ * SELECT común. Los productos asociados viven en la tabla puente
+ * `promocion_producto` (N por promoción); se traen embebidos con su nombre.
+ */
+const SELECT_PROMOCION = `
+  *,
+  categoria ( nombre ),
+  promocion_producto ( id_producto, producto ( nombre ) )
+`
+
+const porNombre = (a, b) =>
+  (a.nombre ?? '').localeCompare(b.nombre ?? '', 'es', { sensitivity: 'base' }) ||
+  a.idProducto - b.idProducto
 
 function mapPromocion(row) {
   if (!row) return null
+
+  const vinculos  = Array.isArray(row.promocion_producto) ? row.promocion_producto : []
+  const productos = vinculos
+    .map((v) => ({ idProducto: v.id_producto, nombre: v.producto?.nombre ?? null }))
+    .sort(porNombre)
+
   return {
     idPromocion:  row.id_promocion,
     nombre:       row.nombre,
     descripcion:  row.descripcion,
     tipo:         row.tipo,
     alcance:      row.alcance,
-    idProducto:   row.id_producto,
     idCategoria:  row.id_categoria,
     fechaInicio:  row.fecha_inicio,
     fechaFin:     row.fecha_fin,
     valor:        row.valor != null ? Number(row.valor) : null,
     activo:       row.activo,
+    // Productos asociados (alcance = 'producto'). `idsProductos` es lo que consume
+    // calcularPromocionParaItem; `productos` es lo que muestra la UI.
+    productos,
+    idsProductos: productos.map((p) => p.idProducto),
     // si viene con JOIN
-    nombreProducto:  row.producto?.nombre   ?? null,
-    nombreCategoria: row.categoria?.nombre  ?? null,
+    nombreCategoria: row.categoria?.nombre ?? null,
+  }
+}
+
+/**
+ * Traduce una promoción del dominio a los argumentos tipados de las RPC
+ * `crear_promocion` / `actualizar_promocion`. Pura → testeable sin red.
+ * Los ids solo viajan si el alcance es 'producto' (el backend lo exige).
+ */
+export function construirArgsRpc(promo, quitarDeOtras = []) {
+  return {
+    p_nombre:        promo.nombre,
+    p_tipo:          promo.tipo,
+    p_alcance:       promo.alcance,
+    p_fecha_inicio:  promo.fechaInicio,
+    p_fecha_fin:     promo.fechaFin,
+    p_descripcion:   promo.descripcion ?? null,
+    p_id_categoria:  promo.alcance === 'categoria' ? (promo.idCategoria ?? null) : null,
+    p_valor:         promo.valor ?? null,
+    p_activo:        promo.activo ?? true,
+    p_ids_productos: promo.alcance === 'producto' ? normalizarIds(promo.idsProductos) : [],
+    // Conflictos resueltos por el usuario: vínculos producto↔promoción a quitar de otras
+    // promociones, dentro de la misma transacción.
+    p_quitar: promo.alcance === 'producto'
+      ? quitarDeOtras.map(({ idPromocion, idProducto }) => ({ id_promocion: idPromocion, id_producto: idProducto }))
+      : [],
   }
 }
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 /**
- * Devuelve todas las promociones con datos de producto y categoría asociados.
+ * Devuelve todas las promociones con sus productos (N) y categoría asociados.
  * Equivale a:
- *   SELECT pr.*, p.nombre as nombreProducto, c.nombre as nombreCategoria
- *   FROM Promocion pr
- *   LEFT JOIN Producto p ON pr.idProducto = p.idProducto
- *   LEFT JOIN Categoria c ON pr.idCategoria = c.idCategoria
- *   ORDER BY pr.fechaInicio DESC
+ *   SELECT pr.*, c.nombre, array_agg(pp.id_producto)
+ *   FROM promocion pr
+ *   LEFT JOIN categoria c ON pr.id_categoria = c.id_categoria
+ *   LEFT JOIN promocion_producto pp ON pp.id_promocion = pr.id_promocion
+ *   ORDER BY pr.fecha_inicio DESC
  */
 export async function obtenerPromociones({
   soloActivas = false,
@@ -49,11 +104,7 @@ export async function obtenerPromociones({
 } = {}) {
   let q = supabase
     .from('promocion')
-    .select(`
-      *,
-      producto  ( nombre ),
-      categoria ( nombre )
-    `)
+    .select(SELECT_PROMOCION)
     .order('fecha_inicio', { ascending: orden === 'asc' })
 
   if (soloActivas) q = q.eq('activo', true)
@@ -74,11 +125,7 @@ export async function obtenerPromocionesVigentes(fecha = null) {
 
   const { data, error } = await supabase
     .from('promocion')
-    .select(`
-      *,
-      producto  ( nombre ),
-      categoria ( nombre )
-    `)
+    .select(SELECT_PROMOCION)
     .eq('activo', true)
     .lte('fecha_inicio', hoy)
     .gte('fecha_fin', hoy)
@@ -94,11 +141,7 @@ export async function obtenerPromocionesVigentes(fecha = null) {
 export async function obtenerPromocionPorId(idPromocion) {
   const { data, error } = await supabase
     .from('promocion')
-    .select(`
-      *,
-      producto  ( nombre ),
-      categoria ( nombre )
-    `)
+    .select(SELECT_PROMOCION)
     .eq('id_promocion', idPromocion)
     .single()
 
@@ -109,52 +152,30 @@ export async function obtenerPromocionPorId(idPromocion) {
 // ─── Mutaciones ───────────────────────────────────────────────────────────────
 
 /**
- * Crea una nueva promoción.
- * Equivale a: INSERT INTO Promocion (...) VALUES (...)
+ * Crea una promoción junto con sus productos asociados en UNA transacción
+ * (RPC `crear_promocion`): o se guarda todo o no se guarda nada.
+ * @param {object} promo  { nombre, descripcion, tipo, alcance, idsProductos[], idCategoria,
+ *                          fechaInicio, fechaFin, valor, activo }
+ * @param {{ quitarDeOtras?: Array<{idPromocion:number, idProducto:number}> }} [opciones]
+ *        Productos a quitar de OTRAS promociones (resolución de conflictos). Si una queda
+ *        sin productos se desactiva. Todo en la misma transacción.
+ * @returns {Promise<{ idPromocion: number }>}
  */
-export async function crearPromocion(promo) {
-  const { data, error } = await supabase
-    .from('promocion')
-    .insert({
-      nombre:       promo.nombre,
-      descripcion:  promo.descripcion  ?? null,
-      tipo:         promo.tipo,
-      alcance:      promo.alcance,
-      id_producto:  promo.idProducto   ?? null,
-      id_categoria: promo.idCategoria  ?? null,
-      fecha_inicio: promo.fechaInicio,
-      fecha_fin:    promo.fechaFin,
-      valor:        promo.valor        ?? null,
-      activo:       promo.activo       ?? true,
-    })
-    .select()
-    .single()
-
+export async function crearPromocion(promo, { quitarDeOtras = [] } = {}) {
+  const { data, error } = await supabase.rpc('crear_promocion', construirArgsRpc(promo, quitarDeOtras))
   if (error) manejarError('crearPromocion', error)
-  return mapPromocion(data)
+  return { idPromocion: data }
 }
 
 /**
- * Actualiza una promoción existente.
- * Equivale a: UPDATE Promocion SET ... WHERE idPromocion = ?
+ * Actualiza una promoción y sincroniza sus productos (agrega/quita según la nueva
+ * selección) en UNA transacción (RPC `actualizar_promocion`).
  */
-export async function actualizarPromocion(idPromocion, promo) {
-  const { error } = await supabase
-    .from('promocion')
-    .update({
-      nombre:       promo.nombre,
-      descripcion:  promo.descripcion  ?? null,
-      tipo:         promo.tipo,
-      alcance:      promo.alcance,
-      id_producto:  promo.idProducto   ?? null,
-      id_categoria: promo.idCategoria  ?? null,
-      fecha_inicio: promo.fechaInicio,
-      fecha_fin:    promo.fechaFin,
-      valor:        promo.valor        ?? null,
-      activo:       promo.activo       ?? true,
-    })
-    .eq('id_promocion', idPromocion)
-
+export async function actualizarPromocion(idPromocion, promo, { quitarDeOtras = [] } = {}) {
+  const { error } = await supabase.rpc('actualizar_promocion', {
+    p_id_promocion: idPromocion,
+    ...construirArgsRpc(promo, quitarDeOtras),
+  })
   if (error) manejarError('actualizarPromocion', error)
 }
 
@@ -173,16 +194,26 @@ export async function togglePromocion(idPromocion, activo) {
 }
 
 /**
- * Elimina una promoción.
- * Equivale a: DELETE FROM Promocion WHERE idPromocion = ?
+ * Elimina una promoción. Los vínculos en `promocion_producto` caen por
+ * ON DELETE CASCADE. Los presupuestos ya generados NO se alteran:
+ * `detalle_presupuesto.id_promocion` no tiene FK y `precio_con_promo` /
+ * `subtotal` son un snapshot al momento de la venta.
+ *
+ * PostgREST responde 204 aunque RLS impida borrar (0 filas). Por eso se pide
+ * `.select()` y se valida que realmente se haya eliminado una fila; si no, se
+ * informa como error en vez de mostrar un falso "éxito".
  */
 export async function eliminarPromocion(idPromocion) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('promocion')
     .delete()
     .eq('id_promocion', idPromocion)
+    .select('id_promocion')
 
   if (error) manejarError('eliminarPromocion', error)
+  if (!data?.length) {
+    manejarError('eliminarPromocion', { code: CODIGOS.RECURSO_NO_ENCONTRADO, message: 'sin filas afectadas' })
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -195,7 +226,8 @@ export async function eliminarPromocion(idPromocion) {
  * devuelve la promoción aplicable y el precio final calculado.
  *
  * Orden de prioridad (de mayor a menor especificidad):
- *   1. Promoción de producto exacto  (alcance = 'producto')
+ *   1. Promoción de producto         (alcance = 'producto'; el producto debe estar
+ *                                     entre sus `idsProductos`)
  *   2. Promoción de categoría        (alcance = 'categoria')
  *   3. Promoción global              (alcance = 'global')
  *
@@ -213,7 +245,7 @@ export function calcularPromocionParaItem(item, promos) {
 
   // 1. Buscar por especificidad descendente
   const promoProducto  = promos.find(p =>
-    p.alcance === 'producto'  && p.idProducto  === item.idProducto
+    p.alcance === 'producto'  && p.idsProductos?.includes(item.idProducto)
   )
   const promoCategoria = promos.find(p =>
     p.alcance === 'categoria' && p.idCategoria === item.idCategoria
@@ -296,4 +328,4 @@ export async function aplicarPromocionesACarrito(items, fecha = null) {
       ahorro,
     }
   })
-}
+}
