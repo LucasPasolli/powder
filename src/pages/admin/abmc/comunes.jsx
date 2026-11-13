@@ -104,8 +104,8 @@ export function Pagination({ page, total, pageSize, onChange, onNavigate }) {
         {from}–{to} de {total}
       </p>
       <div className="flex gap-2">
-        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => goTo(Math.max(1, page - 1))} disabled={page === 1}>← Anterior</Button>
-        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => goTo(Math.min(totalPages, page + 1))} disabled={page === totalPages}>Siguiente →</Button>
+        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none min-h-[44px] min-[1025px]:min-h-0 justify-center" onClick={() => goTo(Math.max(1, page - 1))} disabled={page === 1}>← Anterior</Button>
+        <Button size="sm" variant="secondary" className="flex-1 sm:flex-none min-h-[44px] min-[1025px]:min-h-0 justify-center" onClick={() => goTo(Math.min(totalPages, page + 1))} disabled={page === totalPages}>Siguiente →</Button>
       </div>
     </div>
   )

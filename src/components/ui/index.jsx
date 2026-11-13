@@ -478,10 +478,14 @@ export function Modal({ open, onClose, title, children, width = 'max-w-lg', busy
   useEffect(() => {
     if (!open) return
     const id = requestAnimationFrame(() => {
-      const foco = contenedorRef.current?.querySelector(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      // FIX: antes `(foco)` quedaba pegado a la línea anterior (sin `;`) y JS lo parseaba como
+      // una LLAMADA `querySelector(...)(foco)` → ReferenceError en cada apertura de modal.
+      const foco = /** @type {HTMLElement | null} */ (
+        contenedorRef.current?.querySelector(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        )
       )
-      /** @type {HTMLElement | null} */ (foco)?.focus()
+      foco?.focus()
     })
     return () => cancelAnimationFrame(id)
   }, [open])
