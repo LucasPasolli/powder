@@ -200,6 +200,8 @@ function CampoPanel({ campo, borrador, onCambio, idBase }) {
  * @param {React.ReactNode} [props.izquierda] Contenido de la fila cuando la pantalla NO tiene buscador
  *                                            (p. ej. el período vigente en Estadísticas). Se ignora si hay `busqueda`.
  * @param {React.ReactNode} [props.debajo]    Línea informativa bajo la fila (p. ej. «Período: …»).
+ * @param {'centro'|'fin'} [props.alineacion] Alineación vertical de la fila. `'fin'` alinea el botón «Filtros»
+ *                                            con la base del buscador cuando éste lleva un rótulo visible encima.
  * @param {Record<string, any>} props.value     Valores APLICADOS de los campos del panel.
  * @param {Record<string, any>} props.defaults  Valores por defecto (mismas claves que `value`).
  * @param {CampoFiltro[]} props.campos          Campos del panel, en orden.
@@ -215,6 +217,7 @@ function CampoPanel({ campo, borrador, onCambio, idBase }) {
  */
 export default function FiltrosMovil({
   busqueda, izquierda, debajo, value, defaults, campos, onApply, alCambiar, validar, error, contar,
+  alineacion = 'centro',
 }) {
   const idBase = useId()
   const [abierto, setAbierto] = useState(false)
@@ -250,7 +253,7 @@ export default function FiltrosMovil({
   return (
     <>
       <Card className="p-3 sm:p-4 space-y-2">
-        <div className="flex items-center gap-2">
+        <div className={`flex gap-2 ${alineacion === 'fin' ? 'items-end' : 'items-center'}`}>
           {busqueda ?? <div className="flex-1 min-w-0">{izquierda}</div>}
           <Button variant="secondary" icon={SlidersHorizontal} onClick={abrir} aria-haspopup="dialog"
             className="h-11 !py-0 flex-shrink-0 justify-center">

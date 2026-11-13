@@ -1,5 +1,5 @@
 // src/pages/Inventario.jsx
-import { useState, useEffect, useCallback, useRef, useId } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react'
 import { usePaginatedList } from '../hooks/usePaginatedList'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
 import {
@@ -19,14 +19,18 @@ import {
 import { supabase } from '../lib/supabase'
 import { MEDIDAS_VALIDAS } from '../lib/medidasProducto'
 import { Button, Card, PageHeader, Modal, Input, Select, Badge } from '../components/ui'
-import FiltrosMovil, { BuscadorListado } from '../components/ui/FiltrosMovil'
+import FiltrosInventario from '../components/inventario/FiltrosInventario'
+import { useVistaInventario, useGuardarVista } from '../hooks/useVistaInventario'
+import { prepararCatalogo } from '../lib/busquedaProductos'
+import {
+  compilarCriterios, cumpleCriterios, reconciliarDesplegables, mensajeSinResultados,
+} from '../lib/inventarioFiltros'
 import { useBreakpoint } from '../hooks/useBreakpoint'
 import {
   esBajoStock, estadoStock, etiquetaEstadoStock,
-  SORT_OPCIONES, valorOrden, parseOrden,
   hayFiltrosActivos as tieneFiltrosActivos,
 } from '../lib/inventarioUtils'
-import { Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, PackagePlus, X, CheckCircle2, TrendingUp, FileSpreadsheet, AlertTriangle, Truck, ChevronsUpDown, Check } from 'lucide-react'
+import { Plus, Pencil, Trash2, ChevronDown, ChevronUp, PackagePlus, X, CheckCircle2, TrendingUp, FileSpreadsheet, AlertTriangle, Truck, ChevronsUpDown, Check } from 'lucide-react'
 // NOTA: se usa `exceljs` (y no `xlsx`/SheetJS) porque la edición Community de
 // SheetJS no escribe estilos de celda (negrita, relleno) al generar el
 // archivo: el `.s` que se le asigna a la celda se ignora silenciosamente al
@@ -46,10 +50,6 @@ import { Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, PackagePlus, X, C
 // ─── Constantes ───────────────────────────────────────────────────────────
 
 // MEDIDAS_VALIDAS: fuente única en lib/medidasProducto (compartida con Pedidos de Compra).
-
-function normalize(str) {
-  return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-}
 
 function fmt(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n ?? 0)
@@ -866,13 +866,6 @@ function CatModal({ open, onClose, onSaved, categorias }) {
 
 const ESTADO_STOCK_CLASE = { sin: 'text-red-400', bajo: 'text-yellow-400', ok: 'text-emerald-400' }
 
-// Campo de filtro: 44px de alto (objetivo táctil), 16px en mobile para que iOS
-// no haga zoom automático al enfocar, y el tamaño compacto original desde `sm`.
-const CAMPO_FILTRO =
-  'w-full min-h-[44px] bg-surface-700 border border-surface-600 rounded-xl py-2 text-white text-base sm:text-sm ' +
-  'font-body placeholder-surface-500 focus:outline-none focus:border-brand-500 ' +
-  'focus-visible:ring-1 focus-visible:ring-brand-500/30 transition-all'
-
 const TD = 'py-3 px-4 text-surface-200 align-middle'
 
 function ProveedoresResumen({ proveedores }) {
@@ -1009,14 +1002,12 @@ const PAGE_SIZE = 50
 export default function Inventario() {
   const [categorias,   setCategorias]   = useState([])
   const [proveedores,  setProveedores]  = useState([])
-  const [searchNombre, setSearchNombre] = useState('')
-  const [searchId,     setSearchId]     = useState('')
-  const [filterCat,    setFilterCat]    = useState('all')
-  const [filterProveedor, setFilterProveedor] = useState('all')
-  const [filterStock,  setFilterStock]  = useState('all')
-  const [filterBajoStock, setFilterBajoStock] = useState(false)
-  const [sortKey,      setSortKey]      = useState('nombre')
-  const [sortDir,      setSortDir]      = useState('asc')
+  // Buscadores + filtros + orden viven en UN objeto, restaurado desde sessionStorage al volver a la
+  // pantalla (escenario 11). La página se restaura vía `initialPage` de usePaginatedList.
+  const {
+    filtros, setFiltros, cambiarFiltro, aplicarFiltros, limpiarFiltros,
+    sortKey, sortDir, setOrden, toggleOrden, paginaInicial,
+  } = useVistaInventario()
 
   const [modalNuevo,   setModalNuevo]   = useState(false)
   const [modalEditar,  setModalEditar]  = useState(false)
@@ -1033,6 +1024,9 @@ export default function Inventario() {
 
   const showToast = useCallback((message, type = 'success') => setToast({ message, type }), [])
 
+  // Criterios tipados: se compilan UNA vez por cambio de filtros (no por producto).
+  const criterios = useMemo(() => compilarCriterios(filtros), [filtros])
+
   // ── Datos + paginación ────────────────────────────────────────────────
   // El fetcher trae categorías y proveedores como efecto colateral (los
   // necesita el resto de la pantalla) y devuelve solo el array de
@@ -1044,6 +1038,7 @@ export default function Inventario() {
     items:     productos,
     rawItems:  allProductos,
     page, setPage, totalPages,
+    loading, error,
     reload,
   } = usePaginatedList({
     fetcher: async () => {
@@ -1056,22 +1051,14 @@ export default function Inventario() {
       ])
       setCategorias(cats)
       setProveedores(provs)
-      return prods.map((p) => ({ ...p, categoriaNombre: p.categoria, stockTotal: p.cantidad }))
+      // `prepararCatalogo` agrega `nombreNormalizado` (sin tildes/mayúsculas) UNA vez por carga,
+      // no una vez por producto y por tecla.
+      return prepararCatalogo(prods.map((p) => ({ ...p, categoriaNombre: p.categoria, stockTotal: p.cantidad })))
     },
-    clientFilters: { searchNombre, searchId, filterCat, filterProveedor, filterStock, filterBajoStock, sortKey, sortDir },
-    clientFilter: (p, cf) => {
-      if (cf.searchId.trim() && String(p.idProducto) !== cf.searchId.trim()) return false
-      if (cf.searchNombre.trim() && !normalize(p.nombre).includes(normalize(cf.searchNombre.trim()))) return false
-      if (cf.filterCat !== 'all' && p.idCategoria !== parseInt(cf.filterCat)) return false
-      if (cf.filterProveedor !== 'all') {
-        const idProv = parseInt(cf.filterProveedor)
-        if (!(p.proveedores ?? []).some((pv) => pv.idProveedor === idProv)) return false
-      }
-      if (cf.filterStock === 'con' && !(p.stockTotal > 0)) return false
-      if (cf.filterStock === 'sin' && !(p.stockTotal === 0)) return false
-      if (cf.filterBajoStock && !esBajoStock(p)) return false
-      return true
-    },
+    // El objeto de filtros se compara por contenido: cambiar cualquiera resetea la página a 1.
+    clientFilters: { ...filtros, sortKey, sortDir },
+    // Predicado compartido (lib/inventarioFiltros): nombre Y ID Y categoría Y proveedor Y stock Y bajo stock.
+    clientFilter: (p) => cumpleCriterios(p, criterios),
     sort: (a, b, cf) => {
       let valA, valB
       if (cf.sortKey === 'stock')       { valA = a.stockTotal;     valB = b.stockTotal }
@@ -1081,48 +1068,24 @@ export default function Inventario() {
       return cf.sortDir === 'asc' ? valA - valB : valB - valA
     },
     pageSize: PAGE_SIZE,
+    initialPage: paginaInicial,
   })
   const { anchorRef: tableAnchorRef, scrollToStart } = useScrollAnchor()
 
   const loadSinResetPage = reload
 
-  const filtros = { searchNombre, searchId, filterCat, filterProveedor, filterStock, filterBajoStock }
   const hayFiltros = tieneFiltrosActivos(filtros)
 
-  function limpiarFiltros() {
-    setSearchNombre(''); setSearchId(''); setFilterCat('all')
-    setFilterProveedor('all'); setFilterStock('all'); setFilterBajoStock(false)
-  }
+  // Persistencia (escenario 11): filtros + orden + página sobreviven a navegar y volver.
+  useGuardarVista({ filtros, sortKey, sortDir, page })
 
-  // ── Panel de filtros móvil ────────────────────────────────────────────
-  // El buscador por nombre queda en la pantalla; todo lo demás (ID, categoría, proveedor,
-  // stock, bajo stock y orden) va al panel. Mismo estado que en escritorio: sólo cambia
-  // cómo se presenta y cuándo se aplica.
-  const TODAS = { value: 'all', label: 'Todos' }
-  const valoresPanel = { searchId, filterCat, filterProveedor, filterStock, filterBajoStock, orden: valorOrden(sortKey, sortDir) }
-  const defaultsPanel = {
-    searchId: '', filterCat: 'all', filterProveedor: 'all', filterStock: 'all', filterBajoStock: false,
-    orden: valorOrden('nombre', 'asc'),
-  }
-  const camposPanel = [
-    { tipo: 'texto', clave: 'searchId', etiqueta: 'ID', placeholder: 'Número de producto', inputMode: 'numeric',
-      normalizar: (s) => s.replace(/\D/g, '') },
-    { tipo: 'select', clave: 'filterCat', etiqueta: 'Categoría',
-      opciones: [TODAS, ...categorias.map((c) => ({ value: String(c.idCategoria), label: c.nombre }))] },
-    { tipo: 'select', clave: 'filterProveedor', etiqueta: 'Proveedor',
-      opciones: [TODAS, ...proveedores.map((p) => ({ value: String(p.idProveedor), label: p.nombreComercial || p.nombreFiscal }))] },
-    { tipo: 'select', clave: 'filterStock', etiqueta: 'Stock',
-      opciones: [TODAS, { value: 'con', label: 'Con stock' }, { value: 'sin', label: 'Sin stock' }] },
-    { tipo: 'checkbox', clave: 'filterBajoStock', etiqueta: 'Bajo stock', texto: 'Solo bajo stock' },
-    { tipo: 'select', clave: 'orden', etiqueta: 'Ordenar por',
-      opciones: SORT_OPCIONES.map((o) => ({ value: o.value, label: o.label })) },
-  ]
-  function aplicarPanel(b) {
-    setSearchId(b.searchId); setFilterCat(b.filterCat); setFilterProveedor(b.filterProveedor)
-    setFilterStock(b.filterStock); setFilterBajoStock(b.filterBajoStock)
-    const o = parseOrden(b.orden)
-    setSortKey(o.sortKey); setSortDir(o.sortDir)
-  }
+  // Tras cargar (o recargar) datos, los desplegables restaurados o desactualizados vuelven a «Todos» si ya
+  // no dejan ningún producto (p. ej. se borró el último producto de ese proveedor). Con el catálogo aún
+  // vacío NO se reconcilia: se pisaría la vista restaurada.
+  useEffect(() => {
+    if (loading || allProductos.length === 0) return
+    setFiltros((previo) => reconciliarDesplegables(previo, allProductos))
+  }, [loading, allProductos, setFiltros])
 
   const abrirStock    = (p) => { setSelected(p); setModalStock(true) }
   const abrirEditar   = (p) => { setSelected(p); setModalEditar(true) }
@@ -1130,10 +1093,7 @@ export default function Inventario() {
 
   const ariaSort = (col) => sortKey !== col ? 'none' : sortDir === 'asc' ? 'ascending' : 'descending'
 
-  function toggleSort(key) {
-    if (sortKey === key) setSortDir((d) => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(key); setSortDir('asc') }
-  }
+  const toggleSort = toggleOrden
 
   function SortIcon({ col }) {
     if (sortKey !== col) return <span className="text-surface-600 ml-1">↕</span>
@@ -1251,9 +1211,9 @@ export default function Inventario() {
                 {base.filter((p) => p.stockTotal === 0).length}
               </p>
             </div>
-            <button type="button" onClick={() => setFilterBajoStock((v) => !v)} aria-pressed={filterBajoStock}
+            <button type="button" onClick={() => cambiarFiltro('filterBajoStock', !filtros.filterBajoStock)} aria-pressed={filtros.filterBajoStock}
               className={`rounded-xl p-4 border text-left transition-all
-                ${filterBajoStock ? 'bg-yellow-500/20 border-yellow-400/60' : 'bg-yellow-500/10 border-yellow-500/30 hover:bg-yellow-500/15'}`}>
+                ${filtros.filterBajoStock ? 'bg-yellow-500/20 border-yellow-400/60' : 'bg-yellow-500/10 border-yellow-500/30 hover:bg-yellow-500/15'}`}>
               <p className="text-yellow-300 text-xs uppercase tracking-widest font-body">Bajo stock</p>
               <p className="font-display text-3xl text-yellow-200 tracking-widest mt-0.5">
                 {base.filter(esBajoStock).length}
@@ -1264,96 +1224,22 @@ export default function Inventario() {
         )
       })()}
 
-      {/* Filtros */}
-      {/* Mobile/tablet (≤ 1024px): patrón único del sistema (buscador + botón «Filtros» + panel
-          con borrador). Desktop: una sola fila inline, aplicación inmediata (sin cambios). */}
-      {isCompact ? (
-        <FiltrosMovil
-          busqueda={(
-            <BuscadorListado id="inv-buscar-nombre" value={searchNombre} onChange={setSearchNombre}
-              placeholder="Buscar por nombre..." etiqueta="Buscar por nombre" />
-          )}
-          value={valoresPanel}
-          defaults={defaultsPanel}
-          campos={camposPanel}
-          onApply={aplicarPanel}
-          debajo={(
-            <p role="status" aria-live="polite" className="sr-only">
-              {productos.length} de {allProductos.length} producto{allProductos.length === 1 ? '' : 's'}
-            </p>
-          )}
-        />
-      ) : (
-      <Card className="p-4">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,2.2fr)_7rem_repeat(3,minmax(0,1fr))]">
-          <div className="relative">
-            <label htmlFor="inv-buscar-nombre" className="sr-only">Buscar por nombre</label>
-            <Search size={15} aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
-            <input id="inv-buscar-nombre" type="text" inputMode="search" enterKeyHint="search" autoComplete="off"
-              value={searchNombre} onChange={(e) => setSearchNombre(e.target.value)}
-              placeholder="Buscar por nombre..."
-              className={`${CAMPO_FILTRO} pl-9 pr-4`} />
-          </div>
-
-          <div>
-            <label htmlFor="inv-buscar-id" className="sr-only">Buscar por ID</label>
-            <input id="inv-buscar-id" type="text" inputMode="numeric" autoComplete="off"
-              value={searchId} onChange={(e) => setSearchId(e.target.value.replace(/\D/g, ''))}
-              placeholder="ID..."
-              className={`${CAMPO_FILTRO} px-4 font-mono`} />
-          </div>
-
-          <div>
-            <label htmlFor="inv-filtro-cat" className="sr-only">Categoría</label>
-            <select id="inv-filtro-cat" value={filterCat} onChange={(e) => setFilterCat(e.target.value)}
-              className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
-              <option value="all" className="font-body">Todas las categorías</option>
-              {categorias.map((c) => (
-                <option key={c.idCategoria} value={c.idCategoria} className="font-body">{c.nombre}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="inv-filtro-prov" className="sr-only">Proveedor</label>
-            <select id="inv-filtro-prov" value={filterProveedor} onChange={(e) => setFilterProveedor(e.target.value)}
-              className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
-              <option value="all" className="font-body">Todos los proveedores</option>
-              {proveedores.map((p) => (
-                <option key={p.idProveedor} value={p.idProveedor} className="font-body">
-                  {p.nombreComercial || p.nombreFiscal}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="inv-filtro-stock" className="sr-only">Stock</label>
-            <select id="inv-filtro-stock" value={filterStock} onChange={(e) => setFilterStock(e.target.value)}
-              className={`${CAMPO_FILTRO} px-3 cursor-pointer`}>
-              <option value="all" className="font-body">Todo el stock</option>
-              <option value="con" className="font-body">Con stock</option>
-              <option value="sin" className="font-body">Sin stock</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="mt-3 flex items-center justify-between gap-3 min-h-[36px]">
-          <p role="status" aria-live="polite" className="text-surface-400 text-xs font-body">
-            {productos.length} de {allProductos.length} producto{allProductos.length === 1 ? '' : 's'}
-          </p>
-          {hayFiltros && (
-            <button type="button" onClick={limpiarFiltros}
-              className="flex items-center gap-2 bg-surface-700 border border-surface-600 rounded-xl px-3 py-2
-                         text-surface-300 text-sm font-body hover:border-red-500/50 hover:text-red-400
-                         hover:bg-red-500/10 transition-all cursor-pointer whitespace-nowrap
-                         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
-              <X size={13} aria-hidden="true" /> Limpiar filtros
-            </button>
-          )}
-        </div>
-      </Card>
-      )}
+      {/* Buscadores y filtros: dos buscadores independientes (nombre / ID) + dependientes + resumen */}
+      <FiltrosInventario
+        esCompacto={isCompact}
+        filtros={filtros}
+        onCambiar={cambiarFiltro}
+        onAplicar={aplicarFiltros}
+        onLimpiar={limpiarFiltros}
+        catalogo={allProductos}
+        categorias={categorias}
+        proveedores={proveedores}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onOrden={setOrden}
+        mostrados={productos.length}
+        total={allProductos.length}
+      />
 
       {/* Listado: tarjetas por producto (< lg) · tabla (≥ lg) */}
       <div ref={tableAnchorRef}>
@@ -1430,9 +1316,28 @@ export default function Inventario() {
           </table>
         </div>
 
-        {productos.length === 0 && (
-          <div className="flex flex-col items-center gap-3 text-center py-12 sm:py-16 px-4 text-surface-500 font-body text-sm">
-            <p>Sin resultados para la búsqueda actual.</p>
+        {loading && allProductos.length === 0 && (
+          <p role="status" className="text-center py-12 sm:py-16 px-4 text-surface-400 font-body text-sm">
+            Cargando productos…
+          </p>
+        )}
+
+        {/* Mensaje genérico: el detalle técnico del backend no se expone al usuario (ya queda en el log). */}
+        {!loading && error && allProductos.length === 0 && (
+          <div role="alert" className="flex flex-col items-center gap-3 text-center py-12 sm:py-16 px-4 font-body text-sm">
+            <p className="text-red-400">No se pudo cargar el inventario.</p>
+            <Button variant="secondary" className="justify-center min-h-[44px] sm:min-h-0" onClick={reload}>
+              Reintentar
+            </Button>
+          </div>
+        )}
+
+        {!loading && !error && productos.length === 0 && (
+          <div role="status" className="flex flex-col items-center gap-3 text-center py-12 sm:py-16 px-4 font-body text-sm">
+            <p className="text-white font-medium">Sin resultados</p>
+            {mensajeSinResultados(filtros) && (
+              <p className="text-surface-400 max-w-md break-words">{mensajeSinResultados(filtros)}</p>
+            )}
             {hayFiltros && (
               <Button variant="secondary" className="justify-center min-h-[44px] sm:min-h-0" onClick={limpiarFiltros}>
                 Limpiar filtros

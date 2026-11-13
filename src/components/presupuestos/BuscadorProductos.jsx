@@ -220,7 +220,7 @@ export default function BuscadorProductos({ promociones, onAgregar }) {
             <Search size={16} aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
             <input
               id={`${uid}-nombre`} ref={refNombre} type="search" enterKeyHint="search"
-              value={textoNombre} placeholder="Ej.: freno cbx"
+              value={textoNombre} placeholder="Nombre de producto..."
               onChange={(e) => alCambiarNombre(e.target.value)}
               onFocus={() => { setCampo('nombre'); catalogo.refrescarSiVencido() }}
               className={CAMPO}
