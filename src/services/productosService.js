@@ -287,6 +287,68 @@ export async function obtenerProveedoresDeProducto(idProducto) {
   return mapProveedoresAsociados(data)
 }
 
+// ─── Buscadores del Presupuestador ────────────────────────────────────────────
+
+const COLUMNAS_BUSQUEDA = 'id_producto, id_categoria, nombre, precio_unitario, cantidad, tiene_medidas'
+const TAMANO_PAGINA_CATALOGO = 1000 // tope por defecto de PostgREST
+const MAX_PAGINAS_CATALOGO = 100     // salvaguarda contra un bucle infinito (100.000 productos)
+const MAX_ID_INT4 = 2147483647
+
+/** Shape mínimo que consume el buscador (sin JOINs: es la lista que se carga completa). */
+function mapProductoBusqueda(row) {
+  return {
+    idProducto:     row.id_producto,
+    idCategoria:    row.id_categoria,
+    nombre:         row.nombre,
+    precioUnitario: Number(row.precio_unitario),
+    cantidad:       row.cantidad ?? 0,
+    tieneMedidas:   row.tiene_medidas ? 1 : 0,
+  }
+}
+
+/**
+ * Catálogo de productos ACTIVOS con solo las columnas que usa el buscador por nombre.
+ * El filtrado (sin tildes, varias palabras) se hace en el cliente — ver lib/busquedaProductos.js —
+ * porque `ilike` no ignora tildes sin la extensión `unaccent`. Se pagina porque PostgREST
+ * corta en 1000 filas por request; el orden por PK mantiene estable la paginación.
+ */
+export async function obtenerCatalogoParaBusqueda() {
+  const filas = []
+  for (let pagina = 0; pagina < MAX_PAGINAS_CATALOGO; pagina += 1) {
+    const desde = pagina * TAMANO_PAGINA_CATALOGO
+    const { data, error } = await supabase
+      .from('producto')
+      .select(COLUMNAS_BUSQUEDA)
+      .eq('activo', true)
+      .order('id_producto')
+      .range(desde, desde + TAMANO_PAGINA_CATALOGO - 1)
+
+    if (error) manejarError('obtenerCatalogoParaBusqueda', error)
+    filas.push(...data)
+    if (data.length < TAMANO_PAGINA_CATALOGO) break
+  }
+  return filas.map(mapProductoBusqueda)
+}
+
+/**
+ * Producto ACTIVO con ese ID exacto, o `null` si no existe / está dado de baja / el id es inválido.
+ * Un id fuera del rango de int4 se descarta acá para no provocar un error 22003 del servidor.
+ */
+export async function buscarProductoActivoPorId(idProducto) {
+  const id = Number(idProducto)
+  if (!Number.isInteger(id) || id < 1 || id > MAX_ID_INT4) return null
+
+  const { data, error } = await supabase
+    .from('producto')
+    .select(COLUMNAS_BUSQUEDA)
+    .eq('id_producto', id)
+    .eq('activo', true)
+    .maybeSingle()
+
+  if (error) manejarError('buscarProductoActivoPorId', error)
+  return data ? mapProductoBusqueda(data) : null
+}
+
 // ─── Mutaciones de Producto ───────────────────────────────────────────────────
 
 /**

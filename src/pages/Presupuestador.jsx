@@ -12,7 +12,7 @@ import { obtenerPresupuestoPorId, obtenerDetallesDePresupuesto } from '../servic
 // y sin validar el total en el servidor). Ahora es atómica y usa la misma validación.
 import { crearPresupuestoIdempotente, actualizarPresupuestoIdempotente } from '../services/presupuestosIdempotente'
 import { useClaveIdempotencia } from '../lib/idempotency'
-import { buscarProductos, obtenerProductoPorId, obtenerMedidasDeProducto } from '../services/productosService'
+import { obtenerProductoPorId, obtenerMedidasDeProducto } from '../services/productosService'
 import { calcularPromocionParaItem, obtenerPromocionesVigentes } from '../services/promocionesService'
 // [FIX Ajuste vs Promo] Regla única: el ajuste por método de pago NO se aplica a ítems con promoción.
 import { calcularTotales, derivarFactorAjustable, factorCompatibleRpc } from '../lib/calculoPresupuesto'
@@ -33,10 +33,12 @@ import { useTecladoVirtual } from '../hooks/useTecladoVirtual'
 import { useDropdownAnclado } from '../hooks/useDropdownAnclado'
 import { aplicarSignoPct, esRecargoPct } from '../lib/pctExcepcion'
 import BarraAccionesMovil from '../components/presupuestos/BarraAccionesMovil'
+// [BUSCADORES] Carga de ítems con dos buscadores independientes (nombre / ID).
+import BuscadorProductos from '../components/presupuestos/BuscadorProductos'
 
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Button, Card, PageHeader, Modal, Input } from '../components/ui'
-import { Plus, Trash2, Search, UserPlus, CheckCircle2, AlertCircle, Download, FileText, ArrowLeft, X, Tag } from 'lucide-react'
+import { Trash2, Search, UserPlus, CheckCircle2, AlertCircle, Download, FileText, ArrowLeft, X, Tag } from 'lucide-react'
 
 // ─── Constantes ────────────────────────────────────────────────────────────
 
@@ -424,10 +426,7 @@ function ClienteSelector({ value, onChange, onToast, compacto }) {
 // padre (Presupuestador). Cada ItemRow consulta el mismo caché compartido,
 // así que si dos filas tienen el mismo producto, el segundo fetch nunca sale
 // a la red.
-function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearError, onStockError, getProductoCached, compacto = false, scrollAlMontar = false }) {
-  const [nombreSearch,   setNombreSearch]   = useState(item.nombreProducto || '')
-  const [nombreResults,  setNombreResults]  = useState([])
-  const [showDrop,       setShowDrop]       = useState(false)
+function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearError, onStockError, getProductoCached, compacto = false }) {
   // `medidas`: variantes completas del producto ({ medida, cantidad, ... }),
   // no solo el nombre — se necesita la cantidad para poder distinguir
   // "no hay stock en ninguna medida" de "seleccioná una medida".
@@ -438,28 +437,16 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
   // que "sin stock" desde la perspectiva del presupuestador: no hay nada
   // seleccionable).
   const [usaMedidas,     setUsaMedidas]      = useState(false)
-  const [idError,        setIdError]        = useState('')
   const [stockWarning,   setStockWarning]   = useState('')
-  const [priceWarning,   setPriceWarning]   = useState(false)
   const [tooltipPos,     setTooltipPos]     = useState({ top: 0, left: 0 })
   const [showTooltip,    setShowTooltip]    = useState(false)
-  // [OPTIMIZACIÓN 6] Indicador visual de búsqueda de productos en curso
-  const [searchingProd,  setSearchingProd]  = useState(false)
   const cantRef   = useRef(null)
-  const wrapRef   = useRef(null)
-  const inputRef  = useRef(null)
   const priceRef  = useRef(null)
   const [showPriceTooltip, setShowPriceTooltip] = useState(false)
   const [priceTooltipPos,  setPriceTooltipPos]  = useState({ top: 0, left: 0 })
-  const filaRef = useRef(null)
 
-  // [MOBILE/TABLET] Al agregar un ítem, la tarjeta nueva queda debajo del botón: se la trae a la
-  // vista (`scroll-mb-32` en la fila deja lugar para la barra fija de acciones).
-  useEffect(() => {
-    if (!scrollAlMontar || !filaRef.current) return
-    const reducir = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    filaRef.current.scrollIntoView({ block: 'nearest', behavior: reducir ? 'auto' : 'smooth' })
-  }, [scrollAlMontar])
+  // [BUSCADORES] Sin precio definido: se deriva del ítem (antes era un estado que seteaba el picker).
+  const priceWarning = !!item.idProducto && !parseFloat(item.precioUnitario)
 
   // Precio efectivo (con o sin promo)
   const precioEfectivo = itemConPromo?.precioConPromo != null
@@ -467,50 +454,6 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
     : (parseFloat(item.precioUnitario) || 0)
 
   const tienePromo = itemConPromo?.precioConPromo != null
-
-  // [OPTIMIZACIÓN 1] Estado del input de nombre — separado del valor que
-  // dispara el fetch para poder aplicar debounce.
-  const debouncedNombreSearch = useDebounce(nombreSearch, 400)
-
-  useEffect(() => {
-    const handler = e => {
-      if (
-        wrapRef.current && !wrapRef.current.contains(e.target) &&
-        !e.target.closest('[data-producto-drop]')
-      ) setShowDrop(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  // [MOBILE/TABLET] Posición del desplegable: en escritorio, el cálculo de siempre; en ≤ 1024 px se
-  // recorta al ancho de pantalla y a la zona visible sobre el teclado (ver hooks/useDropdownAnclado).
-  const estiloDrop = useDropdownAnclado({ abierto: showDrop, anclaRef: inputRef, compacto })
-
-  // [OPTIMIZACIÓN 1] La búsqueda de productos por nombre ahora está debounceada.
-  // Se dispara solo cuando debouncedNombreSearch cambia (el usuario pausa de escribir),
-  // no en cada keystroke. También usa cancel token para ignorar respuestas de
-  // queries anteriores si el usuario sigue escribiendo.
-  useEffect(() => {
-    // Si el producto ya está seleccionado (tiene idProducto), no buscar
-    if (!debouncedNombreSearch.trim() || item.idProducto) {
-      setNombreResults([])
-      setShowDrop(false)
-      setSearchingProd(false)
-      return
-    }
-    let cancelled = false
-    setSearchingProd(true)
-    buscarProductos({ texto: debouncedNombreSearch.trim() })
-      .then(rows => {
-        if (cancelled) return
-        setNombreResults(rows.slice(0, 12))
-        setShowDrop(true)
-      })
-      .catch(() => { if (!cancelled) { setNombreResults([]); setShowDrop(true) } })
-      .finally(() => { if (!cancelled) setSearchingProd(false) })
-    return () => { cancelled = true }
-  }, [debouncedNombreSearch, item.idProducto])
 
   // [OPTIMIZACIÓN 2] Usar caché compartido para cargar medidas. Si el producto
   // ya fue consultado en esta sesión (por checkStock u otro ItemRow), los datos
@@ -531,6 +474,12 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
         } else {
           setMedidas([])
           onUpdate(uid, 'medida', null)
+        }
+        // [BUSCADORES] Ítem recién agregado desde el buscador: avisa de inmediato si el stock no
+        // alcanza para la cantidad 1 (antes lo hacía el picker de la propia fila al elegir).
+        if (item.verificarStock) {
+          onUpdate(uid, 'verificarStock', false)
+          checkStock(item.idProducto, null, item.cantidad)
         }
       })
       .catch(() => { if (!cancelled) { setMedidas([]); setUsaMedidas(false) } })
@@ -576,90 +525,6 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
     }
   }
 
-  // [OPTIMIZACIÓN 1] El handler del input de nombre ya NO dispara búsquedas.
-  // Solo actualiza el estado local y resetea el producto seleccionado si había uno.
-  // El useEffect con debouncedNombreSearch es quien decide cuándo buscar.
-  function handleNombreChange(text) {
-    setNombreSearch(text)
-    onClearError()
-    onUpdate(uid, 'nombreProducto', text)
-    if (item.idProducto) {
-      onUpdate(uid, 'idProducto', '')
-      onUpdate(uid, 'precioUnitario', 0)
-      onUpdate(uid, 'idCategoria', null)
-      onUpdate(uid, 'medida', null)
-      setStockWarning('')
-      onStockError(uid, false)
-      setPriceWarning(false)
-    }
-  }
-
-  function seleccionarProducto(p) {
-    setNombreSearch(p.nombre)
-    setShowDrop(false)
-    onClearError()
-    setIdError('')
-    onUpdate(uid, 'idProducto',     p.idProducto)
-    onUpdate(uid, 'nombreProducto', p.nombre)
-    onUpdate(uid, 'precioUnitario', p.precioUnitario)
-    // [FIX Promo-Categoría] Sin esto, calcularPromocionParaItem siempre recibía
-    // idCategoria = null y las promociones con alcance 'categoria' nunca podían
-    // matchear, sin importar a qué categoría perteneciera el producto elegido.
-    onUpdate(uid, 'idCategoria',    p.idCategoria ?? null)
-    onUpdate(uid, 'medida',         null)
-    setPriceWarning(!p.precioUnitario)
-    checkStock(p.idProducto, null, item.cantidad)
-  }
-
-  async function handleIdChange(val) {
-    const clean = val.replace(/\D/g, '')
-    onClearError()
-    onUpdate(uid, 'idProducto', clean)
-    if (clean) {
-      try {
-        // [OPTIMIZACIÓN 2] Lookup por ID también usa el caché compartido
-        const { producto: p } = await getProductoCached(parseInt(clean))
-        if (p) {
-          setNombreSearch(p.nombre)
-          onUpdate(uid, 'nombreProducto', p.nombre)
-          onUpdate(uid, 'precioUnitario', p.precioUnitario)
-          // [FIX Promo-Categoría] misma corrección que en seleccionarProducto:
-          // el picker por ID es una vía alternativa para elegir producto y
-          // también debía propagar la categoría al ítem.
-          onUpdate(uid, 'idCategoria', p.idCategoria ?? null)
-          onUpdate(uid, 'medida', null)
-          setIdError('')
-          setPriceWarning(!p.precioUnitario)
-          checkStock(p.idProducto, null, item.cantidad)
-        } else {
-          setNombreSearch('')
-          onUpdate(uid, 'nombreProducto', '')
-          onUpdate(uid, 'precioUnitario', 0)
-          onUpdate(uid, 'idCategoria', null)
-          onUpdate(uid, 'medida', null)
-          setIdError(`Sin producto con ID ${clean}`)
-        }
-      } catch {
-        setNombreSearch('')
-        onUpdate(uid, 'nombreProducto', '')
-        onUpdate(uid, 'precioUnitario', 0)
-        onUpdate(uid, 'idCategoria', null)
-        onUpdate(uid, 'medida', null)
-        setIdError(`Sin producto con ID ${clean}`)
-      }
-    } else {
-      setNombreSearch('')
-      onUpdate(uid, 'nombreProducto', '')
-      onUpdate(uid, 'precioUnitario', 0)
-      onUpdate(uid, 'idCategoria', null)
-      onUpdate(uid, 'medida', null)
-      setStockWarning('')
-      onStockError(uid, false)
-      setIdError('')
-      setPriceWarning(false)
-    }
-  }
-
   // ── Presentación ────────────────────────────────────────────────────────────
   // ≤ 1024 px (mobile/tablet): la fila es una TARJETA (grid de 12 columnas, un único DOM y un
   //   único estado: no hay una segunda versión del componente que mantener sincronizada).
@@ -688,7 +553,7 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
   const cerrarTecladoConEnter = (e) => { if (e.key === 'Enter') e.currentTarget.blur() }
 
   return (
-    <tr ref={filaRef}
+    <tr
       className={`grid grid-cols-12 gap-x-3 gap-y-3 rounded-xl border p-3 scroll-mb-32
                   min-[1025px]:table-row min-[1025px]:rounded-none min-[1025px]:border-0 min-[1025px]:border-b
                   min-[1025px]:p-0 min-[1025px]:scroll-mb-0 ${claseFila}`}>
@@ -733,71 +598,28 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
         )}
       </td>
 
-      {/* Nombre */}
-      <td className="col-span-8 min-[768px]:col-span-5 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:min-w-[200px]" ref={wrapRef}>
+      {/* Nombre — solo lectura: el producto se elige en los buscadores de arriba (quitar y volver a agregar para cambiarlo) */}
+      <td className="col-span-8 min-[768px]:col-span-5 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:min-w-[200px]">
         <span aria-hidden="true" className={etiqueta}>Producto</span>
-        <div className="relative">
-          {/* [OPTIMIZACIÓN 1] onChange apunta a handleNombreChange (solo estado local) */}
-          <input
-            ref={inputRef}
-            value={nombreSearch}
-            onChange={e => handleNombreChange(e.target.value)}
-            aria-label={`Nombre del producto del ítem ${index + 1}`}
-            autoComplete="off"
-            enterKeyHint="search"
-            placeholder="Nombre del producto..."
-            className={cell + ' w-full pr-9 min-[1025px]:pr-7'}
-          />
-          {/* [OPTIMIZACIÓN 6] Spinner de búsqueda de producto */}
-          {searchingProd && (
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
-              <div className="w-3 h-3 border-2 border-brand-500/30 border-t-brand-400 rounded-full animate-spin motion-reduce:animate-none" />
-            </div>
-          )}
-        </div>
+        <p aria-label={`Producto del ítem ${index + 1}`}
+           className="flex items-center min-h-[44px] min-[1025px]:min-h-0 text-white text-base min-[1025px]:text-sm font-body leading-snug break-words">
+          {item.nombreProducto || '—'}
+        </p>
         {/* [BORRADOR] Escenario 7: producto dado de baja mientras el borrador estaba guardado */}
         {item.noDisponible && (
           <p className="text-red-400 text-xs min-[1025px]:text-[10px] font-body mt-1 leading-tight">
             No disponible — quitá este ítem para poder guardar.
           </p>
         )}
-        {showDrop && estiloDrop && createPortal(
-          <div
-            data-producto-drop
-            style={estiloDrop}
-            className="bg-surface-800 border border-surface-600 rounded-xl shadow-2xl max-h-[260px] overflow-y-auto overscroll-contain"
-          >
-            {nombreResults.length === 0 ? (
-              <p className="px-4 py-3 text-surface-300 text-sm min-[1025px]:text-xs font-body break-words">
-                Sin resultados para "{nombreSearch}"
-              </p>
-            ) : (
-              nombreResults.map(p => (
-                <button key={p.idProducto} onClick={() => seleccionarProducto(p)}
-                  className="w-full text-left px-3 py-3 min-[1025px]:py-2.5 hover:bg-surface-700 transition-colors
-                             border-b border-surface-700/60 last:border-0">
-                  <p className="text-white text-sm min-[1025px]:text-xs font-body leading-tight min-[1025px]:leading-tight break-words">{p.nombre}</p>
-                  <p className="text-surface-400 text-xs font-mono mt-0.5 break-words">
-                    #{p.idProducto} · {fmt(p.precioUnitario)}{p.tieneMedidas ? ' · Con medidas' : ''}
-                  </p>
-                </button>
-              ))
-            )}
-          </div>,
-          document.body
-        )}
       </td>
 
-      {/* ID */}
+      {/* ID — solo lectura */}
       <td className="col-span-6 min-[768px]:col-span-2 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-28">
         <span aria-hidden="true" className={etiqueta}>ID</span>
-        <input type="text" inputMode="numeric" enterKeyHint="done" value={item.idProducto || ''}
-          aria-label={`ID del producto del ítem ${index + 1}`}
-          onKeyDown={compacto ? cerrarTecladoConEnter : undefined}
-          onChange={e => handleIdChange(e.target.value)}
-          placeholder="ID"
-          className={cell + ' w-full text-center' + (idError ? ' border-red-500' : '')} />
-        {idError && <p role="alert" className="text-red-400 text-xs min-[1025px]:text-[10px] font-body mt-0.5 leading-tight">{idError}</p>}
+        <p aria-label={`ID del producto del ítem ${index + 1}`}
+           className="flex items-center justify-center min-h-[44px] min-[1025px]:min-h-0 text-surface-200 text-base min-[1025px]:text-sm font-mono">
+          {item.idProducto || '—'}
+        </p>
       </td>
 
       {/* Medida */}
@@ -1126,8 +948,6 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
   const { isCompact: compacto, isDesktop } = useBreakpoint()
   const online = useOnlineStatus()
   const tecladoAbierto = useTecladoVirtual()
-  // Ítem recién agregado (para traerlo a la vista en tarjetas). `null` al cargar/restaurar borrador.
-  const [uidRecienAgregado, setUidRecienAgregado] = useState(null)
 
   // [BORRADOR] Lectura SINCRÓNICA y única al montar: el formulario nace ya
   // restaurado (sin parpadeo de formulario vacío). Solo en alta; la edición de
@@ -1154,7 +974,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
   const [items,              setItems]               = useState(() =>
     borradorInicial?.items.length
       ? borradorInicial.items.map(it => ({ ...ITEM_EMPTY(), ...it })) // _uid nuevo por fila
-      : [ITEM_EMPTY()]
+      : []
   )
   // % de excepción tal como lo tipeó el usuario (antes vivía dentro de MetodoPagoSelector).
   const [pct,                setPct]                 = useState(borradorInicial?.pct ?? '')
@@ -1277,7 +1097,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
         setExcepcionSubMetodo(esExcepcionDB ? pres.metodoPago : 'efectivo')
         setExcepcionFactor(factorDB)
         setPct(pctDB)
-        setItems(itemsDB.length ? itemsDB : [ITEM_EMPTY()])
+        setItems(itemsDB)
         setInitDone(true)
       } catch (err) {
         setInitError(err.message || 'Error al cargar el presupuesto.')
@@ -1423,21 +1243,26 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
     setError('')
   }, [])
 
-  // [FIX Escenario 1] Cargar un nuevo producto es una "nueva acción" del
-  // usuario tanto como editar un campo existente. Antes solo `updateItem`
-  // limpiaba `error`, por lo que un mensaje de un intento de guardado
-  // anterior quedaba visible —mezclado con la fila recién agregada— hasta
-  // que el usuario tocara alguno de los campos de un ítem ya existente.
-  const addItem = useCallback(() => {
-    const nuevoItem = ITEM_EMPTY()
-    setUidRecienAgregado(nuevoItem._uid)
-    setItems(prev => [...prev, nuevoItem])
+  // [BUSCADORES] Agrega el producto elegido en un buscador con cantidad 1. Los importes salen de los
+  // mismos campos que antes (precioUnitario / idCategoria), así que promociones, ajustes y totales
+  // se calculan igual. Cargar un producto es una "nueva acción": limpia el error general previo.
+  const agregarDesdeBuscador = useCallback((p) => {
+    setItems(prev => [...prev, {
+      ...ITEM_EMPTY(),
+      idProducto:     String(p.idProducto),
+      nombreProducto: p.nombre,
+      cantidad:       1,
+      precioUnitario: p.precioUnitario,
+      idCategoria:    p.idCategoria ?? null,
+      medida:         null,
+      verificarStock: true,
+    }])
     setError('')
   }, [])
 
   // Quitar un ítem también es una acción correctiva válida (p. ej. el ítem
   // eliminado era el que disparó el error de stock/precio original), así
-  // que se limpia el error general por la misma razón que en `addItem`.
+  // que se limpia el error general por la misma razón que al agregar un producto desde el buscador.
   const removeItem = useCallback((uid) => {
     setItems(prev => prev.filter(it => it._uid !== uid))
     setStockErrors(prev => { const n = { ...prev }; delete n[uid]; return n })
@@ -1641,7 +1466,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
     // [OPTIMIZACIÓN 2] Limpiar caché al iniciar un presupuesto nuevo para
     // no trabajar con datos de stock desactualizados de la sesión anterior.
     productoCacheRef.current.clear()
-    setCliente(null); setMetodoPago('efectivo'); setItems([ITEM_EMPTY()])
+    setCliente(null); setMetodoPago('efectivo'); setItems([])
     setGuardado(null); setError(''); setExcepcionFactor(1); setExcepcionSubMetodo('efectivo')
     // [BORRADOR] Escenario 4: el formulario siguiente nace vacío y vuelve a autoguardarse.
     setPct(''); setAvisoBorrador(null); reanudarBorrador()
@@ -1749,10 +1574,10 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
 
       {/* Tabla (≥ 1025 px) / lista de tarjetas (≤ 1024 px): mismo <table>, ver ItemRow. */}
       <Card className="overflow-visible">
-        <div className="px-4 sm:px-6 py-4 border-b border-surface-700 flex items-center justify-between gap-3">
+        <div className="px-4 sm:px-6 py-4 border-b border-surface-700">
           <h2 className="font-body font-semibold text-white text-sm">Productos</h2>
-          <Button size="sm" icon={Plus} onClick={addItem} className="min-h-[44px] min-[1025px]:min-h-0">Agregar ítem</Button>
         </div>
+        <BuscadorProductos promociones={promoVigentes} onAgregar={agregarDesdeBuscador} />
         <div className="min-[1025px]:overflow-x-auto min-[1025px]:overflow-y-visible">
           <table className="w-full text-sm block min-[1025px]:table">
             <thead className="hidden min-[1025px]:table-header-group">
@@ -1777,25 +1602,14 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
                   // [OPTIMIZACIÓN 2] Pasar el helper de caché a cada fila
                   getProductoCached={getProductoCached}
                   compacto={compacto}
-                  scrollAlMontar={compacto && item._uid === uidRecienAgregado}
                 />
               ))}
             </tbody>
           </table>
         </div>
-        {items.length > 0 && (
-          <div className="px-4 py-3 border-t border-surface-700/50">
-            <button
-              onClick={addItem}
-              className="flex items-center gap-2 min-h-[44px] min-[1025px]:min-h-0 text-brand-400 hover:text-brand-300 text-sm font-body transition-colors">
-              <Plus size={15} />
-              Agregar ítem
-            </button>
-          </div>
-        )}
         {items.length === 0 && (
           <div className="text-center py-10 text-surface-500 font-body text-sm">
-            Sin ítems. Hacé clic en "Agregar ítem" para empezar.
+            Sin ítems. Buscá un producto por nombre o ID para empezar.
           </div>
         )}
       </Card>
