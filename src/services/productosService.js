@@ -349,6 +349,47 @@ export async function buscarProductoActivoPorId(idProducto) {
   return data ? mapProductoBusqueda(data) : null
 }
 
+const TAMANO_LOTE_STOCK = 200 // ids por request: mantiene corta la URL de PostgREST (`in.(...)`)
+
+/**
+ * Stock VIGENTE de varios productos en 2 consultas por lote (no N+1): el producto y sus medidas.
+ * Lo usa el detalle interno de un presupuesto para recalcular las advertencias de stock con el
+ * dato actual (ver lib/stockPresupuesto.js). Es de solo lectura.
+ *
+ * Los ids que ya no existen simplemente no aparecen en el resultado (el consumidor los trata
+ * como "stock desconocido": no se advierte nada sobre ellos).
+ *
+ * @param {Array<number|string>} ids
+ * @returns {Promise<Map<number, import('../lib/stockPresupuesto').StockProducto>>}
+ */
+export async function obtenerStockActualPorProductos(ids) {
+  const unicos = [...new Set((ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= MAX_ID_INT4))]
+  const resultado = new Map()
+  if (unicos.length === 0) return resultado
+
+  for (let i = 0; i < unicos.length; i += TAMANO_LOTE_STOCK) {
+    const lote = unicos.slice(i, i + TAMANO_LOTE_STOCK)
+    const [prods, meds] = await Promise.all([
+      supabase.from('producto').select('id_producto, cantidad, tiene_medidas').in('id_producto', lote),
+      supabase.from('producto_medida').select('id_producto, medida, cantidad').in('id_producto', lote),
+    ])
+    if (prods.error) manejarError('obtenerStockActualPorProductos(producto)', prods.error)
+    if (meds.error)  manejarError('obtenerStockActualPorProductos(medidas)', meds.error)
+
+    for (const row of prods.data) {
+      resultado.set(row.id_producto, {
+        tieneMedidas: Boolean(row.tiene_medidas),
+        cantidad:     row.cantidad ?? 0,
+        medidas:      [],
+      })
+    }
+    for (const row of meds.data) {
+      resultado.get(row.id_producto)?.medidas.push({ medida: row.medida, cantidad: row.cantidad ?? 0 })
+    }
+  }
+  return resultado
+}
+
 // ─── Mutaciones de Producto ───────────────────────────────────────────────────
 
 /**

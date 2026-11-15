@@ -37,6 +37,11 @@ import PagoSplitCampos from '../components/presupuestos/PagoSplitCampos'
 import { registrarPagoSplit, obtenerPagoSplit, obtenerSplitsPorPresupuestos, ErrorPagoSplit } from '../services/pagoSplitService'
 import { esMetodoElegibleSplit, ETIQUETA_METODO, METODOS_SPLIT, fmtPct } from '../lib/pagoSplit'
 import { useDebounce } from '../hooks/useDebounce'
+// [STOCK INFORMATIVO] Marca INTERNA: solo en este detalle (nunca en el PDF ni en vistas del cliente).
+import EtiquetaStock, { ResumenAdvertenciasStock } from '../components/presupuestos/EtiquetaStock'
+import { useEstadosStock } from '../hooks/useEstadosStock'
+import { obtenerStockActualPorProductos } from '../services/productosService'
+import { resumirAdvertencias } from '../lib/stockPresupuesto'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
 import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { derivarFactorAjustable, tienePromocion } from '../lib/calculoPresupuesto'
@@ -415,6 +420,23 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
   const estado      = ESTADOS[pres.estado]  ?? ESTADOS.borrador
   const metodo      = METODOS_PAGO[pres.metodoPago] ?? { label: pres.metodoPago, badge: 'gray' }
   const puedeActuar = pres.estado === 'borrador' || pres.estado === 'aprobado'
+
+  // [STOCK INFORMATIVO] Escenarios 7 y 9: la marca NO se persiste, se recalcula con el stock ACTUAL
+  // cada vez que se abre el detalle. Solo mientras el presupuesto es borrador: una vez aprobado/pagado
+  // el stock ya se movió y compararlo con la existencia de hoy confundiría. Es solo lectura.
+  const mostrarStock = pres.estado === 'borrador' && !loading
+  const lineasStock = useMemo(() => detalles.map(d => ({
+    clave: d.idDetalle, idProducto: d.idProducto, medida: d.medida, cantidad: d.cantidad, nombre: d.nombreProducto,
+  })), [detalles])
+  const { estados: estadosStock } = useEstadosStock(lineasStock, obtenerStockActualPorProductos, { habilitado: mostrarStock })
+  const estadoStockPorDetalle = useMemo(
+    () => (mostrarStock ? new Map(lineasStock.map((l, i) => [l.clave, estadosStock[i]])) : new Map()),
+    [mostrarStock, lineasStock, estadosStock],
+  )
+  const resumenStock = useMemo(
+    () => (mostrarStock ? resumirAdvertencias(lineasStock, estadosStock) : resumirAdvertencias([], [])),
+    [mostrarStock, lineasStock, estadosStock],
+  )
   // Presupuesto de CC aprobado SIN saldo: ocurre cuando el saldo se eliminó
   // desde ABMC (el presupuesto vuelve de 'pagado' a 'aprobado'). Sin este caso
   // el usuario vería "el cobro se gestiona desde Saldos" pero no habría ningún
@@ -702,6 +724,9 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
           <h3 className="font-body font-semibold text-white text-sm">Productos</h3>
           {!loading && <span className="text-surface-400 text-xs font-mono">{detalles.length} ítems</span>}
         </div>
+        {!loading && resumenStock.total > 0 && (
+          <ResumenAdvertenciasStock resumen={resumenStock} className="m-3 sm:m-4" />
+        )}
         {loading
           ? <div className="flex justify-center py-10"><div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"/></div>
           : detalles.length === 0
@@ -732,6 +757,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
                                 </span>
                               )}
                             </div>
+                            <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" />
                           </td>
                           <td className="py-3 px-4">{d.medida ? <Badge color="blue">{d.medida}</Badge> : <span className="text-surface-500 text-xs">—</span>}</td>
                           <td className="py-3 px-4 text-surface-200 font-mono text-center">{d.cantidad}</td>
@@ -766,6 +792,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
                         <div className="min-w-0">
                           <p className="text-surface-500 text-[11px] font-mono mb-0.5">#{i + 1} · Prod. #{d.idProducto}</p>
                           <p className="text-white text-sm font-body break-words">{d.nombreProducto ?? `#${d.idProducto}`}</p>
+                          <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" />
                           {d.productoEliminado && (
                             <span className="inline-block mt-1" title="Este producto ya no está disponible en el catálogo actual. Se muestran su nombre y precio tal como estaban al momento de la venta.">
                               <Badge color="gray">
@@ -956,6 +983,11 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
               botones (fuera de esta zona) siguen siempre accesibles. */}
           <div className="max-h-[calc(100dvh-13rem)] overflow-y-auto overscroll-contain -mx-1 px-1">
           <p className="text-surface-300 text-sm font-body mb-4">{m.body}</p>
+
+          {/* [STOCK INFORMATIVO] Escenario 6: resumen al confirmar. Informativo: el botón no se deshabilita. */}
+          {(m.key === 'aprobar' || m.key === 'pagar') && resumenStock.total > 0 && (
+            <ResumenAdvertenciasStock resumen={resumenStock} className="mb-4" />
+          )}
 
           {/* CORRECCIÓN (desacople Día X / Día Y): captura explícita de la
               fecha real de cobro para Efectivo/Transferencia. Nunca se

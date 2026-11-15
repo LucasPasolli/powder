@@ -35,9 +35,15 @@ import { aplicarSignoPct, esRecargoPct } from '../lib/pctExcepcion'
 import BarraAccionesMovil from '../components/presupuestos/BarraAccionesMovil'
 // [BUSCADORES] Carga de ítems con dos buscadores independientes (nombre / ID).
 import BuscadorProductos from '../components/presupuestos/BuscadorProductos'
+// [STOCK INFORMATIVO] Productos sin stock / con stock insuficiente SE PUEDEN presupuestar: el stock
+// solo se informa (etiqueta + resumen internos). Reglas puras en lib/stockPresupuesto.js.
+import EtiquetaStock, { ResumenAdvertenciasStock } from '../components/presupuestos/EtiquetaStock'
+import { useEstadosStock } from '../hooks/useEstadosStock'
+import { evaluarLineas, resumirAdvertencias, tieneAdvertencia } from '../lib/stockPresupuesto'
 
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Button, Card, PageHeader, Modal, Input } from '../components/ui'
+import { logger } from '../lib/logger'
 import { Trash2, Search, UserPlus, CheckCircle2, AlertCircle, Download, FileText, ArrowLeft, X, Tag } from 'lucide-react'
 
 // ─── Constantes ────────────────────────────────────────────────────────────
@@ -426,21 +432,16 @@ function ClienteSelector({ value, onChange, onToast, compacto }) {
 // padre (Presupuestador). Cada ItemRow consulta el mismo caché compartido,
 // así que si dos filas tienen el mismo producto, el segundo fetch nunca sale
 // a la red.
-function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearError, onStockError, getProductoCached, compacto = false }) {
-  // `medidas`: variantes completas del producto ({ medida, cantidad, ... }),
-  // no solo el nombre — se necesita la cantidad para poder distinguir
-  // "no hay stock en ninguna medida" de "seleccioná una medida".
+function ItemRow({ uid, item, itemConPromo, index, estadoStock, onUpdate, onRemove, onClearError, getProductoCached, compacto = false }) {
+  // `medidas`: variantes completas del producto ({ medida, cantidad, ... }). La cantidad de cada
+  // una se muestra en el selector ("(sin stock)"), pero NO impide elegirla.
   const [medidas,        setMedidas]        = useState([])
-  // Si el producto seleccionado usa medidas (tiene_medidas = true en catálogo).
-  // Necesario aparte de `medidas.length` porque un producto puede usar
-  // medidas y aun así no tener NINGUNA variante cargada todavía (mismo caso
-  // que "sin stock" desde la perspectiva del presupuestador: no hay nada
-  // seleccionable).
+  // Si el producto seleccionado usa medidas (tiene_medidas = true en catálogo). Aparte de
+  // `medidas.length` porque un producto puede usar medidas y no tener ninguna variante cargada.
   const [usaMedidas,     setUsaMedidas]      = useState(false)
-  const [stockWarning,   setStockWarning]   = useState('')
-  const [tooltipPos,     setTooltipPos]     = useState({ top: 0, left: 0 })
-  const [showTooltip,    setShowTooltip]    = useState(false)
-  const cantRef   = useRef(null)
+  // [STOCK INFORMATIVO] La advertencia viene calculada desde el padre (`estadoStock`): una sola
+  // fuente de verdad que también alimenta el resumen. Nunca bloquea.
+  const advertido = tieneAdvertencia(estadoStock)
   const priceRef  = useRef(null)
   const [showPriceTooltip, setShowPriceTooltip] = useState(false)
   const [priceTooltipPos,  setPriceTooltipPos]  = useState({ top: 0, left: 0 })
@@ -456,7 +457,7 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
   const tienePromo = itemConPromo?.precioConPromo != null
 
   // [OPTIMIZACIÓN 2] Usar caché compartido para cargar medidas. Si el producto
-  // ya fue consultado en esta sesión (por checkStock u otro ItemRow), los datos
+  // ya fue consultado en esta sesión (por otro ItemRow o por el cálculo de stock informativo), los datos
   // vienen del Map en memoria sin ir a la red.
   useEffect(() => {
     if (!item.idProducto) { setMedidas([]); setUsaMedidas(false); return }
@@ -475,55 +476,10 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
           setMedidas([])
           onUpdate(uid, 'medida', null)
         }
-        // [BUSCADORES] Ítem recién agregado desde el buscador: avisa de inmediato si el stock no
-        // alcanza para la cantidad 1 (antes lo hacía el picker de la propia fila al elegir).
-        if (item.verificarStock) {
-          onUpdate(uid, 'verificarStock', false)
-          checkStock(item.idProducto, null, item.cantidad)
-        }
       })
       .catch(() => { if (!cancelled) { setMedidas([]); setUsaMedidas(false) } })
     return () => { cancelled = true }
   }, [item.idProducto])
-
-  // Solo tiene sentido evaluar "sin stock en ninguna medida" para productos
-  // que efectivamente usan medidas. Cubre las dos formas en que un producto
-  // puede llegar a este estado: (a) no tiene ninguna variante cargada en
-  // producto_medida, o (b) tiene variantes pero todas en cantidad 0.
-  const sinStockEnNingunaMedida = usaMedidas && medidas.every(m => (m.cantidad ?? 0) <= 0)
-
-  // [OPTIMIZACIÓN 2] checkStock ahora usa el caché compartido — no hace fetch
-  // si el producto ya fue consultado antes en esta sesión de presupuesto.
-  async function checkStock(idProducto, medida, cantidad) {
-    if (!idProducto || !cantidad || parseInt(cantidad) <= 0) {
-      setStockWarning(''); onStockError(uid, false); return
-    }
-    try {
-      const { producto: prod, medidas: medidasProd } = await getProductoCached(parseInt(idProducto))
-      if (!prod) { setStockWarning(''); onStockError(uid, false); return }
-
-      let stockDisp = 0
-      if (prod.tieneMedidas && medida) {
-        const pm = medidasProd.find(m => m.medida === medida)
-        stockDisp = pm?.cantidad ?? 0
-      } else if (!prod.tieneMedidas) {
-        stockDisp = prod.cantidad ?? 0
-      } else {
-        setStockWarning(''); onStockError(uid, false); return
-      }
-
-      const pedido = parseInt(cantidad) || 0
-      if (pedido > stockDisp) {
-        setStockWarning(`Stock disponible: ${stockDisp}.`)
-        onStockError(uid, true)
-      } else {
-        setStockWarning('')
-        onStockError(uid, false)
-      }
-    } catch {
-      setStockWarning(''); onStockError(uid, false)
-    }
-  }
 
   // ── Presentación ────────────────────────────────────────────────────────────
   // ≤ 1024 px (mobile/tablet): la fila es una TARJETA (grid de 12 columnas, un único DOM y un
@@ -567,35 +523,19 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
       <td className="col-span-4 min-[768px]:col-span-2 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-20">
         <span aria-hidden="true" className={etiqueta}>Cant.</span>
         <div className="relative">
-          <input ref={cantRef} type="text" inputMode="numeric" enterKeyHint="done" value={item.cantidad}
+          <input type="text" inputMode="numeric" enterKeyHint="done" value={item.cantidad}
             aria-label={`Cantidad del ítem ${index + 1}`}
+            aria-describedby={advertido ? `stock-${uid}` : undefined}
             onKeyDown={compacto ? cerrarTecladoConEnter : undefined}
             onChange={e => {
               onClearError()
-              const raw = e.target.value.replace(/\D/g, '')
-              onUpdate(uid, 'cantidad', raw)
-              checkStock(item.idProducto, item.medida, raw)
+              onUpdate(uid, 'cantidad', e.target.value.replace(/\D/g, ''))
             }}
             onBlur={e => {
-              const val = (!e.target.value || parseInt(e.target.value) < 1) ? '1' : e.target.value
               if (!e.target.value || parseInt(e.target.value) < 1) onUpdate(uid, 'cantidad', '1')
-              checkStock(item.idProducto, item.medida, val)
-              setShowTooltip(false)
             }}
-            onFocus={() => { if (stockWarning) { const r = cantRef.current?.getBoundingClientRect(); if(r) setTooltipPos({ top: r.top + window.scrollY - 36, left: r.left + window.scrollX }); setShowTooltip(true) } }}
-            onMouseEnter={() => { if (stockWarning) { const r = cantRef.current?.getBoundingClientRect(); if(r) setTooltipPos({ top: r.top + window.scrollY - 36, left: r.left + window.scrollX }); setShowTooltip(true) } }}
-            onMouseLeave={() => setShowTooltip(false)}
-            className={cell + ' w-full text-center' + (stockWarning ? ' !border-yellow-500 !text-yellow-300' : '')} />
+            className={cell + ' w-full text-center' + (advertido ? ' !border-yellow-500 !text-yellow-300' : '')} />
         </div>
-        {/* Globo flotante: sólo escritorio (en táctil no hay hover; ahí el aviso va en línea, más abajo). */}
-        {stockWarning && showTooltip && createPortal(
-          <div style={{ position: 'absolute', top: tooltipPos.top, left: tooltipPos.left, zIndex: 9999, pointerEvents: 'none' }}
-               className="bg-yellow-900/95 border border-yellow-500/60 text-yellow-200 text-[11px] font-body
-                          rounded-lg px-2.5 py-1.5 shadow-xl whitespace-nowrap hidden min-[1025px]:flex items-center gap-1.5">
-            <span>⚠</span><span>{stockWarning}</span>
-          </div>,
-          document.body
-        )}
       </td>
 
       {/* Nombre — solo lectura: el producto se elige en los buscadores de arriba (quitar y volver a agregar para cambiarlo) */}
@@ -605,6 +545,12 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
            className="flex items-center min-h-[44px] min-[1025px]:min-h-0 text-white text-base min-[1025px]:text-sm font-body leading-snug break-words">
           {item.nombreProducto || '—'}
         </p>
+        {/* [STOCK INFORMATIVO] Visible en TODOS los tamaños (no depende de hover) y sin bloquear nada. */}
+        {advertido && (
+          <div id={`stock-${uid}`} role="status" className="mt-1">
+            <EtiquetaStock estado={estadoStock} />
+          </div>
+        )}
         {/* [BORRADOR] Escenario 7: producto dado de baja mientras el borrador estaba guardado */}
         {item.noDisponible && (
           <p className="text-red-400 text-xs min-[1025px]:text-[10px] font-body mt-1 leading-tight">
@@ -628,26 +574,16 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
         {!usaMedidas ? (
           // Producto que no maneja medidas: no hay nada que elegir acá.
           <span className="flex items-center min-h-[44px] min-[1025px]:inline min-[1025px]:min-h-0 text-surface-500 text-xs px-2">—</span>
-        ) : sinStockEnNingunaMedida ? (
-          // Escenario 1: el producto usa medidas pero ninguna variante tiene
-          // stock cargado (o no tiene variantes en absoluto). En vez de dejar
-          // el selector vacío/engañoso, se deshabilita e informa el motivo
-          // explícitamente para que el usuario no confunda esto con un olvido
-          // suyo de elegir una medida.
-          <select disabled value="" aria-label={`Medida del ítem ${index + 1}: sin stock en ninguna medida`}
-            title="Este producto no tiene stock disponible en ninguna medida"
-            className="w-full bg-surface-800 border border-red-900/50 rounded-lg px-3 py-2 min-h-[44px]
-                       text-red-400/90 text-sm font-body cursor-not-allowed
-                       min-[1025px]:px-2 min-[1025px]:py-1.5 min-[1025px]:min-h-0 min-[1025px]:text-xs">
-            <option value="">Sin stock</option>
-          </select>
+        ) : medidas.length === 0 ? (
+          // Usa medidas pero no tiene ninguna variante cargada: no hay nada que elegir (se cotiza
+          // igual; la etiqueta "Sin stock" ya lo informa). No se exige medida.
+          <span className="flex items-center min-h-[44px] min-[1025px]:inline min-[1025px]:min-h-0 text-surface-400 text-xs px-2">
+            Sin medidas cargadas
+          </span>
         ) : (
           <select value={item.medida || ''}
             aria-label={`Medida del ítem ${index + 1}`}
-            onChange={e => {
-              onUpdate(uid, 'medida', e.target.value)
-              checkStock(item.idProducto, e.target.value, item.cantidad)
-            }}
+            onChange={e => onUpdate(uid, 'medida', e.target.value)}
             className="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 min-h-[44px]
                        text-white text-base font-body focus:outline-none focus:border-brand-500 transition-all cursor-pointer
                        min-[1025px]:px-2 min-[1025px]:py-1.5 min-[1025px]:min-h-0 min-[1025px]:text-sm">
@@ -660,16 +596,6 @@ function ItemRow({ uid, item, itemConPromo, index, onUpdate, onRemove, onClearEr
           </select>
         )}
       </td>
-
-      {/* Aviso de stock en línea — sólo tarjeta. En escritorio queda `display: none` (no cuenta
-          como columna) y el aviso sigue siendo el globo flotante de la cantidad. */}
-      {stockWarning && (
-        <td role="status" className="col-span-12 min-[1025px]:hidden -mt-1 flex items-center gap-1.5
-                                     rounded-lg border border-yellow-500/40 bg-yellow-900/20 px-3 py-2
-                                     text-yellow-200 text-sm font-body">
-          <span aria-hidden="true">⚠</span><span className="min-w-0 break-words">{stockWarning}</span>
-        </td>
-      )}
 
       {/* Precio — con soporte de promociones */}
       <td className="col-span-12 min-[640px]:col-span-6 min-w-0 min-[1025px]:py-2 min-[1025px]:px-2 min-[1025px]:w-44">
@@ -918,6 +844,8 @@ function PantallaGuardado({ guardado, onNuevo, onVer }) {
               <span className="min-w-0 break-words text-right text-surface-200 text-sm font-body">{guardado.metodoLabel}</span>
             </div>
           </div>
+          {/* [STOCK INFORMATIVO] Resumen interno de productos sin stock / con stock insuficiente. */}
+          <ResumenAdvertenciasStock resumen={guardado.advertenciasStock} />
           <div className="flex flex-col gap-2 pt-2">
             <Button icon={Download} className="w-full min-h-[44px] min-[1025px]:min-h-0" onClick={() => generarPDFPresupuesto(guardado.idPresupuesto)}>
               Descargar PDF del Presupuesto
@@ -981,7 +909,6 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
   const [guardado,           setGuardado]            = useState(null)
   const [error,              setError]               = useState('')
   const [toast,              setToast]               = useState('')
-  const [stockErrors,        setStockErrors]         = useState({})
   const [saving,             setSaving]              = useState(false)
 
   // [ANTI-DUPLICACIÓN] Clave de idempotencia de ESTE formulario. Se genera al
@@ -1114,7 +1041,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
 
   // ── [OPTIMIZACIÓN 3] Memoizar itemsConPromo y totales ──
   // Antes: se recalculaban en cada render, incluso cuando cambiaban estados
-  // irrelevantes (error, toast, saving, stockErrors).
+  // irrelevantes (error, toast, saving).
   // Ahora: solo se recalculan cuando cambian items o promoVigentes.
   const itemsConPromo = useMemo(() => items.map(item => {
     const { promoAplicada, precioFinal, ahorro } = calcularPromocionParaItem(
@@ -1140,6 +1067,41 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
     () => calcularTotales(itemsConPromo, factorReal),
     [itemsConPromo, factorReal]
   )
+
+  // ══ [STOCK INFORMATIVO] Advertencias de stock (nunca bloquean) ═══════════════
+  // Las líneas se evalúan contra el stock VIGENTE (caché de productos de esta sesión; se limpia
+  // en `nuevo()` y nace vacío al reabrir un presupuesto, así que al editar se recalcula con el
+  // stock actual). No participa de ningún cálculo de precios, promociones ni totales.
+  const lineasStock = useMemo(() => items
+    .filter(it => it.idProducto)
+    .map(it => ({
+      clave:      it._uid,
+      idProducto: it.idProducto,
+      medida:     it.medida || null,
+      cantidad:   it.cantidad,
+      nombre:     it.nombreProducto,
+    })), [items])
+
+  const cargarStock = useCallback(async (ids) => {
+    const pares = await Promise.all(ids.map(async (id) => {
+      try {
+        const { producto, medidas } = await getProductoCached(id)
+        return [id, producto
+          ? { tieneMedidas: !!producto.tieneMedidas, cantidad: producto.cantidad ?? 0, medidas: medidas ?? [] }
+          : null]
+      } catch {
+        return [id, null] // sin dato: no se advierte (nunca se bloquea)
+      }
+    }))
+    return new Map(pares)
+  }, [getProductoCached])
+
+  const { estados: estadosStock } = useEstadosStock(lineasStock, cargarStock)
+  const estadoStockPorUid = useMemo(
+    () => new Map(lineasStock.map((l, i) => [l.clave, estadosStock[i]])),
+    [lineasStock, estadosStock],
+  )
+  const resumenStock = useMemo(() => resumirAdvertencias(lineasStock, estadosStock), [lineasStock, estadosStock])
 
   // ══ [BORRADOR] Restauración, reconciliación y autoguardado ═════════════════
 
@@ -1255,22 +1217,16 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
       precioUnitario: p.precioUnitario,
       idCategoria:    p.idCategoria ?? null,
       medida:         null,
-      verificarStock: true,
     }])
     setError('')
   }, [])
 
   // Quitar un ítem también es una acción correctiva válida (p. ej. el ítem
-  // eliminado era el que disparó el error de stock/precio original), así
+  // eliminado era el que disparó el error de precio original), así
   // que se limpia el error general por la misma razón que al agregar un producto desde el buscador.
   const removeItem = useCallback((uid) => {
     setItems(prev => prev.filter(it => it._uid !== uid))
-    setStockErrors(prev => { const n = { ...prev }; delete n[uid]; return n })
     setError('')
-  }, [])
-
-  const handleStockError = useCallback((uid, hasError) => {
-    setStockErrors(prev => ({ ...prev, [uid]: hasError }))
   }, [])
 
   // [OPTIMIZACIÓN 4] onClearError estable para no recrearse en cada render
@@ -1309,6 +1265,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
       // por un único loop que usa el caché compartido.
       // En el peor caso (ningún producto cacheado) hace N fetches en lugar de 3N.
       // En el caso normal (el usuario interactuó con todos los productos) hace 0 fetches.
+      const stockPorId = new Map()
       for (const it of validItems) {
         let prod, medidas
         try {
@@ -1323,42 +1280,43 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
           setError(`El producto ID ${it.idProducto} no existe en el inventario.`)
           return
         }
-        if (prod.tieneMedidas) {
+        // [STOCK INFORMATIVO] La medida se exige solo si hay variantes entre las que elegir
+        // (con o sin stock: elegir una sin stock es válido). Si el producto usa medidas pero no
+        // tiene ninguna variante cargada no hay nada que elegir y se cotiza igual.
+        if (prod.tieneMedidas && (medidas ?? []).length > 0 && !it.medida) {
           const nombreProd = prod.nombre || it.nombreProducto || `ID ${it.idProducto}`
-          const hayStockEnAlgunaMedida = (medidas ?? []).some(m => (m.cantidad ?? 0) > 0)
-
-          // Primero se descarta la causa de fondo (no hay stock cargado en
-          // NINGUNA medida): si ese es el caso, decirle "seleccioná una
-          // medida" sería engañoso porque no hay ninguna opción válida para
-          // elegir. Ver Escenario 2 — el mensaje debe reflejar la causa real.
-          if (!hayStockEnAlgunaMedida) {
-            setError(`El producto "${nombreProd}" no tiene stock disponible en ninguna medida.`)
-            return
-          }
-          if (!it.medida) {
-            setError(`Seleccioná una medida para el producto "${nombreProd}".`)
-            return
-          }
+          setError(`Seleccioná una medida para el producto "${nombreProd}".`)
+          return
         }
         if (!parseFloat(it.precioUnitario)) {
           setError(`El producto "${it.nombreProducto || 'ID ' + it.idProducto}" no tiene precio definido. Asignalo desde Inventario.`)
           return
         }
 
-        // Validación de stock
-        let stockDisp = 0
-        if (prod.tieneMedidas && it.medida) {
-          const pm = (medidas ?? []).find(m => m.medida === it.medida)
-          stockDisp = pm?.cantidad ?? 0
-        } else if (!prod.tieneMedidas) {
-          stockDisp = prod.cantidad ?? 0
-        } else {
-          continue
-        }
-        if (parseInt(it.cantidad) > stockDisp) {
-          setError(`Stock insuficiente para "${prod.nombre}" (disponible: ${stockDisp}).`)
-          return
-        }
+        // [STOCK INFORMATIVO] Ya NO hay validación de stock: sin stock o con stock insuficiente se
+        // puede guardar. Se junta el stock vigente para el resumen informativo de más abajo.
+        stockPorId.set(parseInt(it.idProducto), {
+          tieneMedidas: !!prod.tieneMedidas,
+          cantidad:     prod.cantidad ?? 0,
+          medidas:      medidas ?? [],
+        })
+      }
+
+      // Resumen de productos afectados, con el stock vigente AL MOMENTO DE GUARDAR (no el del hook,
+      // que podría no haber terminado de resolver si se guardó apenas se agregó un ítem).
+      const lineasGuardado = validItems.map(it => ({
+        clave: it._uid, idProducto: it.idProducto, medida: it.medida || null, cantidad: it.cantidad, nombre: it.nombreProducto,
+      }))
+      const resumenGuardado = resumirAdvertencias(
+        lineasGuardado,
+        evaluarLineas(lineasGuardado, id => stockPorId.get(id)),
+      )
+      if (resumenGuardado.total > 0) {
+        logger.info('presupuesto.guardado_con_advertencias_stock', {
+          modoEdicion,
+          sinStock: resumenGuardado.sinStock,
+          insuficientes: resumenGuardado.insuficientes,
+        })
       }
 
       const fecha    = today()
@@ -1449,7 +1407,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
         ? `Excepción (${METODOS_BASE.find(m => m.value === excepcionSubMetodo)?.label})`
         : METODOS_BASE.find(m => m.value === metodoPago)?.label ?? metodoPago
 
-      setGuardado({ idPresupuesto: presupuestoReal, esCuenta, totalFinal, metodoLabel, clienteNombre: `${cliente.nombre} ${cliente.apellido}`, clienteId: cliente.idCliente })
+      setGuardado({ idPresupuesto: presupuestoReal, esCuenta, totalFinal, metodoLabel, clienteNombre: `${cliente.nombre} ${cliente.apellido}`, clienteId: cliente.idCliente, advertenciasStock: resumenGuardado })
     } catch (err) {
       // [EDICIÓN VÍA RPC] CLAVE_REUTILIZADA: el usuario cambió el contenido tras un envío cuyo
       // resultado quedó incierto. Como la edición REEMPLAZA el estado completo, es seguro
@@ -1595,10 +1553,10 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
                   item={item}
                   itemConPromo={itemsConPromo[idx]}
                   index={idx}
+                  estadoStock={estadoStockPorUid.get(item._uid)}
                   onUpdate={updateItem}
                   onRemove={removeItem}
                   onClearError={handleClearError}
-                  onStockError={handleStockError}
                   // [OPTIMIZACIÓN 2] Pasar el helper de caché a cada fila
                   getProductoCached={getProductoCached}
                   compacto={compacto}
@@ -1613,6 +1571,9 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
           </div>
         )}
       </Card>
+
+      {/* [STOCK INFORMATIVO] Resumen vivo de productos afectados. No bloquea ni pide confirmación. */}
+      <ResumenAdvertenciasStock resumen={resumenStock} />
 
       {/* Totales */}
       <Card className="p-4 sm:p-6">
