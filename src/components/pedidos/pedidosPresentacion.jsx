@@ -2,7 +2,7 @@
 // Helpers de PRESENTACIÓN compartidos por listado, tarjetas y detalle (DRY).
 // Antes vivían dentro de PedidosCompra.jsx y el badge de pago estaba duplicado.
 
-import { CheckCircle2, Clock, Layers, Truck } from 'lucide-react'
+import { CheckCircle2, Clock, FileText, Layers, ReceiptText, Truck } from 'lucide-react'
 import { Badge } from '../ui'
 
 /** Área táctil mínima de 44 px en mobile/tablet; en escritorio no altera el diseño. */
@@ -28,13 +28,15 @@ export function metodoPagoLabel(pedido) {
   return pedido.metodoPago ? cap(pedido.metodoPago) : '—'
 }
 
+/** Etapas del pedido: Original → Facturado → Recibido (ver lib/pedidoFlujo.js). */
 export const ESTADO_CONFIG = {
-  encargado: { label: 'Encargado', color: 'blue',   icon: Clock },
-  recibido:  { label: 'Recibido',  color: 'purple', icon: Truck },
+  original:  { label: 'Original',  color: 'orange', icon: FileText },
+  facturado: { label: 'Facturado', color: 'blue',   icon: ReceiptText },
+  recibido:  { label: 'Recibido',  color: 'violet', icon: Truck },
 }
 
 export function EstadoLogisticoBadge({ pedido }) {
-  const cfg = ESTADO_CONFIG[pedido.estadoLogistico ?? 'encargado'] ?? ESTADO_CONFIG.encargado
+  const cfg = ESTADO_CONFIG[pedido.estadoLogistico ?? 'original'] ?? ESTADO_CONFIG.original
   return (
     <Badge color={cfg.color}>
       <cfg.icon size={11} className="inline mr-1" />{cfg.label}

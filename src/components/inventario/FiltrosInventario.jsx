@@ -79,7 +79,7 @@ export default function FiltrosInventario({
   )
 
   const buscadorNombre = (
-    <CampoBusqueda etiqueta="Buscar por nombre" placeholder="Nombre de producto..." maxLength={MAX_CARACTERES_NOMBRE}
+    <CampoBusqueda etiqueta="Buscar por nombre" placeholder="Kit de Pistón..." maxLength={MAX_CARACTERES_NOMBRE}
       value={filtros.searchNombre} onChange={(v) => onCambiar('searchNombre', v)}
       ayuda={esCompacto ? undefined : AYUDA_NOMBRE} className={esCompacto ? 'flex-1' : ''} />
   )
