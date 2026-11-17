@@ -548,7 +548,7 @@ function ItemRow({ uid, item, itemConPromo, index, estadoStock, onUpdate, onRemo
         {/* [STOCK INFORMATIVO] Visible en TODOS los tamaños (no depende de hover) y sin bloquear nada. */}
         {advertido && (
           <div id={`stock-${uid}`} role="status" className="mt-1">
-            <EtiquetaStock estado={estadoStock} />
+            <EtiquetaStock estado={estadoStock} conIcono={false} conExceso={false} />
           </div>
         )}
         {/* [BORRADOR] Escenario 7: producto dado de baja mientras el borrador estaba guardado */}
@@ -845,7 +845,7 @@ function PantallaGuardado({ guardado, onNuevo, onVer }) {
             </div>
           </div>
           {/* [STOCK INFORMATIVO] Resumen interno de productos sin stock / con stock insuficiente. */}
-          <ResumenAdvertenciasStock resumen={guardado.advertenciasStock} />
+          <ResumenAdvertenciasStock resumen={guardado.advertenciasStock} variante="modal" />
           <div className="flex flex-col gap-2 pt-2">
             <Button icon={Download} className="w-full min-h-[44px] min-[1025px]:min-h-0" onClick={() => generarPDFPresupuesto(guardado.idPresupuesto)}>
               Descargar PDF del Presupuesto

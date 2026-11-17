@@ -758,7 +758,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
                                 </span>
                               )}
                             </div>
-                            <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" />
+                            <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" conIcono={false} />
                           </td>
                           <td className="py-3 px-4">{d.medida ? <Badge color="blue">{d.medida}</Badge> : <span className="text-surface-500 text-xs">—</span>}</td>
                           <td className="py-3 px-4 text-surface-200 font-mono text-center">{d.cantidad}</td>
@@ -793,7 +793,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
                         <div className="min-w-0">
                           <p className="text-surface-500 text-[11px] font-mono mb-0.5">#{i + 1} · Prod. #{d.idProducto}</p>
                           <p className="text-white text-sm font-body break-words">{d.nombreProducto ?? `#${d.idProducto}`}</p>
-                          <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" />
+                          <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" conIcono={false} />
                           {d.productoEliminado && (
                             <span className="inline-block mt-1" title="Este producto ya no está disponible en el catálogo actual. Se muestran su nombre y precio tal como estaban al momento de la venta.">
                               <Badge color="gray">
@@ -991,7 +991,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
 
           {/* [STOCK INFORMATIVO] Escenario 6: resumen al confirmar. Informativo: el botón no se deshabilita. */}
           {(m.key === 'aprobar' || m.key === 'pagar') && resumenStock.total > 0 && (
-            <ResumenAdvertenciasStock resumen={resumenStock} className="mb-4" />
+            <ResumenAdvertenciasStock resumen={resumenStock} variante="modal" className="mb-4" />
           )}
 
           {/* CORRECCIÓN (desacople Día X / Día Y): captura explícita de la
