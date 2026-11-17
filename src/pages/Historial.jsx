@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import Presupuestador from './Presupuestador'
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
+import NotasRegistro from '../components/notas/NotasRegistro'
 import DateField from '../components/ui/DateField'
 import FiltrosMovil, { BuscadorListado, mensajeRangoInvalido } from '../components/ui/FiltrosMovil'
 import PaginadorListado from '../components/ui/PaginadorListado'
@@ -968,6 +969,10 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
           )}
         </Card>
       )}
+
+      {/* Notas al pie del detalle (Escenario 1): debajo de todo el contenido actual.
+          Independiente del estado del registro (Escenario 7) y excluida de PDF/impresión (Escenario 8). */}
+      <NotasRegistro tipo="presupuesto" idRegistro={pres.idPresupuesto} />
 
       {/* Modales estado */}
       {[

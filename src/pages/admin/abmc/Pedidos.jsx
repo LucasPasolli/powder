@@ -9,6 +9,7 @@ import { obtenerPedidos, actualizarEstadosPedido, eliminarPedido } from '../../.
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, normalizarTexto, Pagination, ConfirmModal } from './comunes'
 import { FiltrosGestionMovil, opcionesTodas } from './comunes'
 import { useBreakpoint } from '../../../hooks/useBreakpoint'
+import { useAvisoNotas } from '../../../hooks/useAvisoNotas'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PEDIDOS DE COMPRA
@@ -39,6 +40,8 @@ export default function Pedidos() {
   const [confirm, setConfirm] = useState(null)
   const [search, setSearch] = useState('')
   const { isCompact } = useBreakpoint()
+  // Escenario 11: avisa si el pedido tiene notas que se eliminarán con él.
+  const { aviso: avisoNotas } = useAvisoNotas('pedido_compra', confirm)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(1)
@@ -203,6 +206,7 @@ export default function Pedidos() {
           ['Monto', fmt(confirmRow.monto)],
         ] : []}
         message="¿Eliminar este pedido y todos sus detalles?"
+        avisos={[avisoNotas]}
       />
     </div>
   )

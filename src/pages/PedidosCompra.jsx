@@ -6,6 +6,7 @@ import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
 import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { supabase } from '../lib/supabase'
 import { Card, PageHeader, Button, Badge, Modal, Input } from '../components/ui'
+import NotasRegistro from '../components/notas/NotasRegistro'
 import {
   Plus, Trash2, Search, CheckCircle2, AlertCircle,
   ArrowLeft, ShoppingCart, Package, Clock, BadgeCheck,
@@ -1001,6 +1002,10 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar, onFact
           </div>
         </div>
       </Card>
+
+      {/* Notas al pie del detalle (Escenario 1): debajo de todo el contenido actual.
+          Independiente del estado del registro (Escenario 7) y excluida de PDF/impresión (Escenario 8). */}
+      <NotasRegistro tipo="pedido_compra" idRegistro={pedido.idPedido} />
 
       {/* Modal confirmar pago */}
       <Modal open={confirmPagar} onClose={() => setConfirmPagar(false)} title="Confirmar pago" width="max-w-sm">

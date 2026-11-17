@@ -22,6 +22,7 @@ import {
   obtenerAplicacionesDeSaldo,
 } from '../services/pagosService'
 import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
+import NotasRegistro from '../components/notas/NotasRegistro'
 import FiltrosMovil, { BuscadorListado } from '../components/ui/FiltrosMovil'
 import KpiCard from '../components/ui/KpiCard'
 import PaginadorListado from '../components/ui/PaginadorListado'
@@ -656,6 +657,10 @@ function SaldoDetalle({ saldo, onBack, onUpdated }) {
           )}
         </div>
       </Card>
+
+      {/* Notas al pie del detalle (Escenario 1): debajo de todo el contenido actual.
+          Independiente del estado del registro (Escenario 7) y excluida de PDF/impresión (Escenario 8). */}
+      <NotasRegistro tipo="saldo" idRegistro={saldo.idSaldo} />
 
       {/* Modal confirmar cobro del remanente completo */}
       <Modal open={confirmPago} onClose={() => setConfirmPago(false)} title="Confirmar cobro" width="max-w-sm">

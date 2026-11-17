@@ -76,3 +76,9 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-shake, .animate-slide-up, .animate-fade-in { animation: none !important; opacity: 1; }
 }
+
+/* Escenario 8 (notas): la sección de notas nunca se imprime. Refuerza `print:hidden`
+   por si la build de Tailwind no incluye la variante `print`. */
+@media print {
+  [data-no-print] { display: none !important; }
+}
