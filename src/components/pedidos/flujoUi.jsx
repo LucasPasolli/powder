@@ -64,8 +64,9 @@ export function EtapasPedido({ estado }) {
   return (
     <ol className="flex items-center gap-1.5 sm:gap-2 flex-wrap" aria-label="Etapas del pedido">
       {PASOS.map((p, i) => {
-        const hecho = i < actual
-        const esActual = i === actual
+        // Pedido recibido = flujo terminado: la última etapa también queda completada (verde), no «en curso».
+        const hecho = i < actual || (i === actual && estado === ESTADO.RECIBIDO)
+        const esActual = i === actual && !hecho
         return (
           <li key={p.estado} className="flex items-center gap-1.5 sm:gap-2" aria-current={esActual ? 'step' : undefined}>
             <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-sm min-[1025px]:text-xs font-body

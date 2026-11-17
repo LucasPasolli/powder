@@ -1,155 +1,292 @@
 // src/components/pedidos/ComparacionPedidoDialog.jsx
 //
 // «Comparar original vs facturado»: lado a lado, por artículo, con el % de diferencia.
-// Los cálculos viven en lib/pedidoComparacion.js (puro y testeado); acá sólo se presenta.
+// Los cálculos viven en lib/pedidoComparacion.js (puro y testeado); acá SÓLO se presenta.
+// REDISEÑO VISUAL: no cambia carga de datos, comparación, filtro ni cálculos.
 //
-// Responsive:
-//   mobile (<768)  → una tarjeta por línea, sin scroll horizontal de la página.
-//   tablet/desktop → tabla (si el ancho no alcanza, scrollea DENTRO de su contenedor).
+// Criterios de diseño (minimalismo, según buenas prácticas de tablas y vistas de diferencias):
+//   · Sin rellenos, sin bordes verticales, sin cebreado: sólo líneas horizontales de 1 px.
+//   · El color se reserva para lo QUE CAMBIÓ (valor de diferencia y estado); lo igual queda neutro y atenuado.
+//   · El color nunca va solo: siempre con signo (+/−), ícono y texto.
+//   · Números alineados a la derecha, encabezados alineados con su columna, sin negritas decorativas.
+//   · Un único cuadro de resumen (una sola superficie), sin tarjetas anidadas.
+//
+// Responsive — 100 % CSS (md: / lg:), sin estado por breakpoint: rotar el equipo no re-monta nada.
+//   mobile  (< 768 px)  → una tarjeta por línea, sin scroll horizontal de la página.
+//   tablet  (768–1023)  → tabla; las columnas de precio se colapsan y viajan bajo el producto.
+//   desktop (≥ 1024)    → tabla completa con grupos «Cantidad» y «Precio unitario».
+// Si la tabla no entra, scrollea DENTRO de su contenedor, nunca la página.
 // El diálogo es pantalla completa hasta 1024 px y modal centrado en escritorio (ResponsiveDialog).
 //
-// Accesibilidad: el tipo de línea se comunica con texto + ícono, no sólo con color.
+// Accesibilidad (WCAG 2.1 AA): el tipo de línea se comunica con texto + ícono + signo (+/−),
+// no sólo con color; encabezados de tabla con scope; estados con role="status" / "alert".
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, MinusCircle, PlusCircle, RefreshCw, TrendingDown, TrendingUp, CheckCircle2, Info } from 'lucide-react'
-import { Badge, Button, Spinner } from '../ui'
+import {
+  AlertTriangle, ArrowLeftRight, CheckCircle2, Info, MinusCircle, PlusCircle, RefreshCw, Tag,
+  WifiOff,
+} from 'lucide-react'
+import { Button, Card } from '../ui'
 import ResponsiveDialog from '../ui/ResponsiveDialog'
-import { AvisoError, ETIQUETA } from './flujoUi'
+import { ETIQUETA } from './flujoUi'
 import { TOUCH, fmt } from './pedidosPresentacion'
 import { esAnteriorAlFlujo } from '../../lib/pedidoFlujo'
 import {
   compararPedido, filtrarConDiferencias, formatearPct, ETIQUETA_TIPO, TIPO_LINEA, MENSAJE_SIN_MODIFICACIONES,
 } from '../../lib/pedidoComparacion'
-import { useBreakpoint } from '../../hooks/useBreakpoint'
 import { FlujoPedidoError, obtenerPedidoParaFlujo } from '../../services/pedidosFlujoService'
+import { useOnlineStatus } from '../../hooks/useOnlineStatus'
 import { logger } from '../../lib/logger'
 
-/** Estilo + ícono + texto por tipo de línea (el resaltado distingue quitadas, reducidas y agregadas). */
-function estiloLinea(l) {
-  if (l.tipo === TIPO_LINEA.QUITADA)   return { fila: 'bg-red-500/10',     color: 'red',    Icono: MinusCircle, texto: ETIQUETA_TIPO[l.tipo] }
-  if (l.tipo === TIPO_LINEA.AGREGADA)  return { fila: 'bg-emerald-500/10', color: 'green',  Icono: PlusCircle,  texto: ETIQUETA_TIPO[l.tipo] }
-  if (l.tipo === TIPO_LINEA.CANTIDAD_MODIFICADA) {
-    return l.direccion === 'reducida'
-      ? { fila: 'bg-amber-500/10', color: 'yellow', Icono: TrendingDown, texto: 'Cantidad reducida' }
-      : { fila: 'bg-blue-500/10',  color: 'blue',   Icono: TrendingUp,   texto: 'Cantidad aumentada' }
+// ─── Tokens locales de presentación (paleta del sistema, sin colores nuevos) ───────────────
+// Clases como literales completos para que Tailwind las detecte.
+// Paleta acotada y jerárquica: SÓLO dos matices de alerta sobre el fondo oscuro del sistema.
+//   baja  → rojo tenue     (disminuyó: cantidad menor, producto quitado, precio menor)
+//   sube  → amarillo tenue (aumentó: cantidad mayor, producto agregado, precio mayor)
+// Lo que no cambió queda neutro. El fondo de la fila lleva el matiz; el texto usa el mismo tono.
+const TONO = {
+  baja: { fila: 'bg-red-500/10',    texto: 'text-red-300' },
+  sube: { fila: 'bg-yellow-500/10', texto: 'text-yellow-300' },
+}
+const TEXTO = { red: 'text-red-300', yellow: 'text-yellow-300', neutral: 'text-surface-200', gray: 'text-surface-400' }
+
+/**
+ * Dirección de la alteración de una línea: 'baja' | 'sube' | null (sin alteración).
+ * Primero manda la cantidad; si la cantidad no cambió, se evalúa el precio unitario.
+ */
+function direccion(l) {
+  if (l.tipo === TIPO_LINEA.QUITADA) return 'baja'
+  if (l.tipo === TIPO_LINEA.AGREGADA) return 'sube'
+  if (l.difUnidades < 0) return 'baja'
+  if (l.difUnidades > 0) return 'sube'
+  if (l.precioCambio && l.precioOriginal != null && l.precioFacturado != null) {
+    if (l.precioFacturado < l.precioOriginal) return 'baja'
+    if (l.precioFacturado > l.precioOriginal) return 'sube'
   }
-  return { fila: '', color: 'gray', Icono: CheckCircle2, texto: ETIQUETA_TIPO[TIPO_LINEA.SIN_CAMBIOS] }
+  return null
 }
+const filaClase = (l) => TONO[direccion(l)]?.fila ?? ''
+const difClase = (l) => TONO[direccion(l)]?.texto ?? 'text-surface-500'
+const esIgual = (l) => direccion(l) === null && !l.precioCambio
 
-const signo = (n) => (n > 0 ? `+${n}` : String(n))
-
-function TipoBadge({ l }) {
-  const e = estiloLinea(l)
-  return <Badge color={e.color}><e.Icono size={11} className="inline mr-1" aria-hidden="true" />{e.texto}</Badge>
-}
-
-function Precios({ l }) {
-  if (!l.precioCambio && l.precioConDescuento == null) return <span className="text-surface-500">—</span>
-  return (
-    <div className="space-y-0.5 font-mono text-xs whitespace-nowrap">
-      {l.precioCambio && (
-        <>
-          <p className="text-surface-300">Orig. {fmt(l.precioOriginal)}</p>
-          <p className="text-white">Fact. {fmt(l.precioFacturado)}</p>
-        </>
-      )}
-      {l.precioConDescuento != null && <p className="text-emerald-400">c/ desc. {fmt(l.precioConDescuento)}</p>}
-    </div>
-  )
-}
-
+const signo = (n) => (n > 0 ? `+${n}` : n < 0 ? `−${Math.abs(n)}` : '0')
 const nombre = (l) => `${l.nombreProducto ?? `#${l.idProducto}`}${l.medida ? ` · ${l.medida}` : ''}`
+const fmtPct = (n) => `${new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)} %`
+const monto = (n) => (n == null ? <span className="text-surface-500" aria-label="sin dato">—</span> : fmt(n))
 
-function Resumen({ r }) {
-  const Stat = ({ label, valor, tono = 'text-white' }) => (
-    <div className="bg-surface-700 rounded-xl p-4 min-w-0">
-      <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body mb-1">{label}</p>
-      <p className={`${tono} font-mono font-bold text-lg break-words`}>{valor}</p>
-    </div>
-  )
-  const tonoImporte = r.difImporte < 0 ? 'text-emerald-400' : r.difImporte > 0 ? 'text-amber-300' : 'text-white'
-  return (
-    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 min-[1025px]:grid-cols-4 gap-3">
-      <Stat label="Diferencia global" valor={`${new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(r.pctGlobal)} %`} tono="text-brand-400" />
-      <Stat label="Total original" valor={fmt(r.totalOriginal)} />
-      <Stat label="Total facturado" valor={fmt(r.totalFacturado)} />
-      <Stat label="Diferencia en importe" valor={`${r.difImporte > 0 ? '+' : ''}${fmt(r.difImporte)}`} tono={tonoImporte} />
-    </div>
-  )
-}
+// ─── Piezas ────────────────────────────────────────────────────────────────────────────────
 
-function Conteos({ r }) {
-  const c = r.conteo
-  const items = [
-    [TIPO_LINEA.QUITADA, 'red', 'Quitadas'], [TIPO_LINEA.CANTIDAD_MODIFICADA, 'yellow', 'Modificadas'],
-    [TIPO_LINEA.AGREGADA, 'green', 'Agregadas'], [TIPO_LINEA.SIN_CAMBIOS, 'gray', 'Sin cambios'],
-  ].filter(([t]) => c[t])
-  if (items.length === 0) return null
+/** Etiqueta en texto plano bajo el nombre: sólo producto quitado/agregado o precio modificado. */
+function EstadoLinea({ l }) {
+  const quitada = l.tipo === TIPO_LINEA.QUITADA
+  const agregada = l.tipo === TIPO_LINEA.AGREGADA
+  if (!quitada && !agregada && !l.precioCambio) return null
   return (
-    <ul className="flex flex-wrap gap-2" aria-label="Cantidad de líneas por tipo">
-      {items.map(([t, color, txt]) => <li key={t}><Badge color={color}>{txt}: {c[t]}</Badge></li>)}
+    <ul className="space-y-0.5 text-xs font-body text-surface-300">
+      {quitada && <li className="flex items-center gap-1.5"><MinusCircle size={12} className="flex-shrink-0" aria-hidden="true" />{ETIQUETA_TIPO[l.tipo]}</li>}
+      {agregada && <li className="flex items-center gap-1.5"><PlusCircle size={12} className="flex-shrink-0" aria-hidden="true" />{ETIQUETA_TIPO[l.tipo]}</li>}
+      {l.precioCambio && <li className="flex items-center gap-1.5"><Tag size={12} className="flex-shrink-0" aria-hidden="true" />Precio modificado</li>}
     </ul>
   )
 }
 
-function Lineas({ lineas, mobile }) {
-  if (mobile) {
-    return (
-      <ul className="space-y-3" aria-label="Comparación por artículo">
-        {lineas.map((l) => (
-          <li key={l.clave} className={`border border-surface-700 rounded-xl p-4 space-y-3 ${estiloLinea(l).fila}`}>
-            <div className="flex items-start justify-between gap-3">
-              <p className="text-white text-base font-body break-words min-w-0">{nombre(l)}</p>
-              <TipoBadge l={l} />
-            </div>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm font-body">
-              <div><dt className="text-surface-400">Original</dt><dd className="text-white font-mono">{l.cantidadOriginal}</dd></div>
-              <div><dt className="text-surface-400">Facturado</dt><dd className="text-white font-mono">{l.cantidadFacturada}</dd></div>
-              <div><dt className="text-surface-400">Diferencia</dt><dd className="text-white font-mono">{signo(l.difUnidades)} u.</dd></div>
-              <div><dt className="text-surface-400">Diferencia %</dt><dd className="text-white font-mono">{formatearPct(l)}</dd></div>
-            </dl>
-            {(l.precioCambio || l.precioConDescuento != null) && (
-              <div className="pt-2 border-t border-surface-700/60"><Precios l={l} /></div>
-            )}
-          </li>
-        ))}
-      </ul>
-    )
-  }
+/** Precio con descuento (si hay): línea secundaria bajo el precio facturado. */
+function ConDescuento({ l }) {
+  if (l.precioConDescuento == null) return null
+  return <p className="text-surface-400 text-xs font-mono tabular-nums mt-0.5 whitespace-nowrap">c/ desc. {fmt(l.precioConDescuento)}</p>
+}
 
-  const TH = 'text-left text-surface-400 text-sm min-[1025px]:text-xs tracking-widest uppercase py-3 px-3 font-body'
+function SeccionTitulo({ children, aside }) {
   return (
-    <div className="overflow-x-auto border border-surface-700 rounded-xl">
+    <div className="flex items-end justify-between gap-3">
+      <h3 className={ETIQUETA}>{children}</h3>
+      {aside}
+    </div>
+  )
+}
+
+/** Resumen: UNA sola superficie. Importes alineados al borde derecho; una única línea divisoria antes de la diferencia. */
+function Resumen({ r }) {
+  const dif = r.difImporte
+  const tono = dif < 0 ? TEXTO.red : dif > 0 ? TEXTO.yellow : 'text-white'
+  const palabra = dif < 0 ? 'menos que el original' : dif > 0 ? 'más que el original' : 'sin diferencia'
+  const c = r.conteo
+  const conteos = [
+    [TIPO_LINEA.QUITADA, 'red', 'quitadas'], [TIPO_LINEA.CANTIDAD_MODIFICADA, 'neutral', 'modificadas'],
+    [TIPO_LINEA.AGREGADA, 'yellow', 'agregadas'], [TIPO_LINEA.SIN_CAMBIOS, 'gray', 'sin cambios'],
+  ].filter(([t]) => c[t])
+  return (
+    <Card className="p-4 sm:p-5">
+      <dl className="space-y-2 text-sm font-body">
+        <div className="flex items-baseline justify-between gap-4">
+          <dt className="text-surface-400">Total original</dt>
+          <dd className="font-mono tabular-nums text-surface-200">{fmt(r.totalOriginal)}</dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-4">
+          <dt className="text-surface-400">Total facturado</dt>
+          <dd className="font-mono tabular-nums text-white">{fmt(r.totalFacturado)}</dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-4 pt-3 mt-1 border-t border-surface-700">
+          <dt className="text-white">Diferencia</dt>
+          <dd className="text-right min-w-0">
+            <span className={`font-mono tabular-nums text-base ${tono}`}>{dif > 0 ? '+' : dif < 0 ? '−' : ''}{fmt(Math.abs(dif))}</span>
+            <span className="block text-surface-500 text-xs">{palabra} · {fmtPct(r.pctGlobal)} de unidades</span>
+          </dd>
+        </div>
+      </dl>
+      {conteos.length > 0 && (
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 mt-4 text-xs font-body text-surface-400" aria-label="Cantidad de líneas por tipo">
+          {conteos.map(([t, color, txt]) => (
+            <li key={t}><span className={`font-mono tabular-nums ${TEXTO[color]}`}>{c[t]}</span> {txt}</li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+/** Mensaje en línea, sin caja ni relleno. */
+function Aviso({ icono: Icono, tono = 'neutral', children }) {
+  return (
+    <p role="status" className={`flex items-start gap-2 text-sm font-body ${tono === 'ok' ? 'text-surface-100' : 'text-surface-300'}`}>
+      <Icono size={16} className="mt-0.5 flex-shrink-0" aria-hidden="true" />{children}
+    </p>
+  )
+}
+
+// ─── Estados transversales (misma estructura que PedidosListado: skeleton / error / vacío) ──
+
+function ComparacionSkeleton() {
+  return (
+    <div role="status" className="space-y-6">
+      <span className="sr-only">Cargando comparación…</span>
+      <div aria-hidden="true" className="h-36 rounded-2xl bg-surface-700/50 animate-pulse motion-reduce:animate-none" />
+      <div aria-hidden="true" className="grid gap-3 sm:grid-cols-2 md:grid-cols-1">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="h-28 md:h-14 rounded-xl bg-surface-700/50 animate-pulse motion-reduce:animate-none" />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ComparacionError({ mensaje, onRetry }) {
+  return (
+    <div role="alert" className="flex flex-col items-center py-12 px-4 gap-3 text-center">
+      <AlertTriangle size={28} className="text-red-400" aria-hidden="true" />
+      <p className="text-surface-300 text-sm font-body max-w-md">{mensaje}</p>
+      <Button variant="secondary" icon={RefreshCw} onClick={onRetry} className={TOUCH}>Reintentar</Button>
+    </div>
+  )
+}
+
+function EstadoVacio({ icono: Icono = Info, titulo, detalle, accion }) {
+  return (
+    <div role="status" className="flex flex-col items-center py-12 px-4 gap-3 text-center">
+      <Icono size={32} className="text-surface-500 opacity-60" aria-hidden="true" />
+      <p className="text-white text-sm font-body font-semibold">{titulo}</p>
+      {detalle && <p className="text-surface-400 text-sm font-body max-w-md">{detalle}</p>}
+      {accion}
+    </div>
+  )
+}
+
+// ─── Detalle por artículo ──────────────────────────────────────────────────────────────────
+
+/** < 768 px: lista dentro de UNA sola superficie, separada por líneas finas (sin una caja por línea). */
+function LineasTarjetas({ lineas }) {
+  return (
+    <Card className="md:hidden overflow-hidden">
+      <ul className="divide-y divide-surface-700" aria-label="Comparación por artículo">
+        {lineas.map((l) => {
+          const igual = esIgual(l)
+          return (
+            <li key={l.clave} className={`p-4 space-y-3 ${filaClase(l)}`}>
+              <div className="space-y-1">
+                <p className={`text-sm font-body leading-tight break-words ${igual ? 'text-surface-300' : 'text-white font-medium'}`}>{nombre(l)}</p>
+                <EstadoLinea l={l} />
+              </div>
+
+              <dl className="grid grid-cols-3 gap-3 text-xs font-body">
+                <div><dt className="text-surface-500">Original</dt><dd className="text-surface-200 font-mono tabular-nums text-sm mt-0.5">{l.cantidadOriginal}</dd></div>
+                <div><dt className="text-surface-500">Facturado</dt><dd className="text-white font-mono tabular-nums text-sm mt-0.5">{l.cantidadFacturada}</dd></div>
+                <div>
+                  <dt className="text-surface-500">Dif.</dt>
+                  <dd className={`font-mono tabular-nums text-sm mt-0.5 ${difClase(l)}`}>
+                    {signo(l.difUnidades)}<span className="block text-xs">{formatearPct(l)}</span>
+                  </dd>
+                </div>
+              </dl>
+
+              {l.precioCambio && (
+                <p className="text-xs font-mono tabular-nums text-surface-400">
+                  Precio <span className="text-surface-300">{fmt(l.precioOriginal)}</span> → <span className="text-white">{fmt(l.precioFacturado)}</span>
+                </p>
+              )}
+              <ConDescuento l={l} />
+            </li>
+          )
+        })}
+      </ul>
+    </Card>
+  )
+}
+
+// Encabezado: una sola fila, sin relleno ni bordes verticales; alineado igual que su columna.
+const TH = 'text-surface-500 text-xs tracking-widest uppercase py-3 px-3 font-body font-normal'
+
+/** ≥ 768 px: tabla. En tablet los precios viajan bajo el producto (`lg:hidden`). */
+function LineasTabla({ lineas }) {
+  return (
+    <Card className="hidden md:block overflow-x-auto">
       <table className="w-full text-sm font-body">
         <caption className="sr-only">Comparación por artículo entre el pedido original y el facturado</caption>
         <thead>
           <tr className="border-b border-surface-700">
-            <th scope="col" className={TH}>Producto</th>
+            <th scope="col" className={`${TH} text-left`}>Producto</th>
             <th scope="col" className={`${TH} text-right`}>Original</th>
             <th scope="col" className={`${TH} text-right`}>Facturado</th>
-            <th scope="col" className={`${TH} text-right`}>Dif. u.</th>
+            <th scope="col" className={`${TH} text-right`}>Dif.</th>
             <th scope="col" className={`${TH} text-right`}>Dif. %</th>
-            <th scope="col" className={TH}>Precio</th>
-            <th scope="col" className={TH}>Tipo</th>
+            <th scope="col" className={`${TH} text-right hidden lg:table-cell`}>Precio orig.</th>
+            <th scope="col" className={`${TH} text-right hidden lg:table-cell`}>Precio fact.</th>
           </tr>
         </thead>
         <tbody>
-          {lineas.map((l) => (
-            <tr key={l.clave} className={`border-b border-surface-700/50 last:border-0 ${estiloLinea(l).fila}`}>
-              <td className="py-3 px-3 text-white break-words max-w-[16rem]">{nombre(l)}</td>
-              <td className="py-3 px-3 text-right font-mono text-surface-200">{l.cantidadOriginal}</td>
-              <td className="py-3 px-3 text-right font-mono text-surface-200">{l.cantidadFacturada}</td>
-              <td className="py-3 px-3 text-right font-mono text-white">{signo(l.difUnidades)}</td>
-              <td className="py-3 px-3 text-right font-mono text-white whitespace-nowrap">{formatearPct(l)}</td>
-              <td className="py-3 px-3"><Precios l={l} /></td>
-              <td className="py-3 px-3"><TipoBadge l={l} /></td>
-            </tr>
-          ))}
+          {lineas.map((l) => {
+            const igual = esIgual(l)
+            const difTono = difClase(l)
+            return (
+              <tr key={l.clave} className={`border-b border-surface-700/50 last:border-0 align-top ${filaClase(l)}`}>
+                <td className="py-3 px-3 max-w-[16rem]">
+                  <p className={`leading-tight break-words ${igual ? 'text-surface-300' : 'text-white'}`}>{nombre(l)}</p>
+                  <div className="mt-1"><EstadoLinea l={l} /></div>
+                  {/* Tablet: precios bajo el producto, sólo si cambiaron */}
+                  {l.precioCambio && (
+                    <p className="lg:hidden text-surface-400 text-xs font-mono tabular-nums mt-1">
+                      Precio {fmt(l.precioOriginal)} → <span className="text-white">{fmt(l.precioFacturado)}</span>
+                    </p>
+                  )}
+                </td>
+                <td className="py-3 px-3 text-right font-mono tabular-nums text-surface-300">{l.cantidadOriginal}</td>
+                <td className="py-3 px-3 text-right font-mono tabular-nums text-white">{l.cantidadFacturada}</td>
+                <td className={`py-3 px-3 text-right font-mono tabular-nums ${difTono}`}>{signo(l.difUnidades)}</td>
+                <td className={`py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap ${difTono}`}>{formatearPct(l)}</td>
+                <td className="hidden lg:table-cell py-3 px-3 text-right font-mono tabular-nums text-surface-300 whitespace-nowrap">{monto(l.precioOriginal)}</td>
+                <td className="hidden lg:table-cell py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                  <span className="text-white">{monto(l.precioFacturado)}</span>
+                  <ConDescuento l={l} />
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
-    </div>
+    </Card>
   )
 }
+
+// ─── Contenedor ────────────────────────────────────────────────────────────────────────────
 
 /**
  * @param {object} props
@@ -158,7 +295,7 @@ function Lineas({ lineas, mobile }) {
  * @param {{idPedido:number}} props.pedido
  */
 export default function ComparacionPedidoDialog({ open, onClose, pedido }) {
-  const { isMobile } = useBreakpoint()
+  const online = useOnlineStatus()
   const [estado, setEstado] = useState('cargando') // 'cargando' | 'listo' | 'error'
   const [error, setError] = useState('')
   const [datos, setDatos] = useState(null)
@@ -186,73 +323,78 @@ export default function ComparacionPedidoDialog({ open, onClose, pedido }) {
 
   const visibles = cmp && !cmp.sinOriginal ? (soloDiferencias ? filtrarConDiferencias(cmp.lineas) : cmp.lineas) : []
 
+  // El slot `toolbar` de ResponsiveDialog ya aporta su padding y borde: acá sólo el control.
   const toolbar = estado === 'listo' && cmp && !cmp.sinOriginal && !cmp.resumen.sinDiferencias ? (
-    <div className="px-4 sm:px-6 py-3 flex items-center">
-      <button
-        type="button" role="switch" aria-checked={soloDiferencias} onClick={() => setSoloDiferencias((v) => !v)}
-        className={`flex items-center gap-3 ${TOUCH} text-sm text-surface-200 font-body focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 rounded-lg px-1`}
-      >
-        <span aria-hidden="true" className={`relative inline-block w-10 h-6 rounded-full transition-colors ${soloDiferencias ? 'bg-brand-500' : 'bg-surface-600'}`}>
-          <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform motion-reduce:transition-none ${soloDiferencias ? 'translate-x-4' : ''}`} />
-        </span>
-        Ver sólo líneas con diferencias
-      </button>
-    </div>
+    <button
+      type="button" role="switch" aria-checked={soloDiferencias} onClick={() => setSoloDiferencias((v) => !v)}
+      className={`flex items-center gap-3 ${TOUCH} text-sm text-surface-200 font-body focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 rounded-lg px-1`}
+    >
+      <span aria-hidden="true" className={`relative inline-block w-10 h-6 rounded-full transition-colors ${soloDiferencias ? 'bg-brand-500' : 'bg-surface-600'}`}>
+        <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform motion-reduce:transition-none ${soloDiferencias ? 'translate-x-4' : ''}`} />
+      </span>
+      Ver sólo líneas con diferencias
+    </button>
   ) : null
 
   return (
     <ResponsiveDialog
       open={open} onClose={onClose} icon={ArrowLeftRight}
       title="Comparar original vs facturado" subtitle={`Pedido #${pedido.idPedido}`}
-      toolbar={toolbar} busy={estado === 'cargando'}
+      toolbar={toolbar} busy={estado === 'cargando'} widthClass="min-[1025px]:max-w-4xl"
+      iconClassName="text-surface-500"
     >
-      <div className="p-4 sm:p-6 space-y-4">
-        {estado === 'cargando' && (
-          <div className="flex items-center justify-center gap-3 py-16 text-surface-300 font-body"><Spinner label="Cargando comparación" /> Cargando…</div>
+      <div className="p-4 sm:p-6 space-y-6">
+        {!online && (
+          <Aviso icono={WifiOff}>Sin conexión: los datos mostrados pueden estar desactualizados.</Aviso>
         )}
 
-        {estado === 'error' && (
-          <div className="space-y-3">
-            <AvisoError>{error}</AvisoError>
-            <Button variant="secondary" icon={RefreshCw} onClick={cargar} className={TOUCH}>Reintentar</Button>
-          </div>
-        )}
+        {estado === 'cargando' && <ComparacionSkeleton />}
+
+        {estado === 'error' && <ComparacionError mensaje={error} onRetry={cargar} />}
 
         {estado === 'listo' && cmp?.sinOriginal && (
-          <div className="flex items-start gap-3 bg-surface-700/60 border border-surface-600 rounded-xl px-4 py-4" role="status">
-            <Info size={18} className="text-surface-300 mt-0.5 flex-shrink-0" aria-hidden="true" />
-            <div className="space-y-1">
-              <p className="text-white text-sm font-body font-semibold">{cmp.mensaje}</p>
-              <p className="text-surface-300 text-sm font-body">
-                {esAnteriorAlFlujo(datos.pedido)
-                  ? 'Pedido anterior al nuevo flujo: no tiene original registrado, por eso no se calculan diferencias.'
-                  : 'Todavía no hay una versión facturada para comparar.'}
-              </p>
-            </div>
-          </div>
+          <EstadoVacio
+            titulo={cmp.mensaje}
+            detalle={esAnteriorAlFlujo(datos.pedido)
+              ? 'Pedido anterior al nuevo flujo: no tiene original registrado, por eso no se calculan diferencias.'
+              : 'Todavía no hay una versión facturada para comparar.'}
+          />
         )}
 
         {estado === 'listo' && cmp && !cmp.sinOriginal && (
           <>
-            <Resumen r={cmp.resumen} />
-            <Conteos r={cmp.resumen} />
+            <section aria-label="Resumen de la comparación" className="space-y-3">
+              <SeccionTitulo>Resumen</SeccionTitulo>
+              <Resumen r={cmp.resumen} />
+              {cmp.resumen.sinDiferencias && (
+                <Aviso icono={CheckCircle2} tono="ok">{MENSAJE_SIN_MODIFICACIONES}</Aviso>
+              )}
+              {!cmp.resumen.sinDiferencias && cmp.resumen.sinCambiosCantidad && (
+                <Aviso icono={Info}>Las cantidades no cambiaron (0 %), pero hubo cambios de precio o descuentos.</Aviso>
+              )}
+            </section>
 
-            {cmp.resumen.sinDiferencias && (
-              <div className="flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3" role="status">
-                <CheckCircle2 size={18} className="text-emerald-400 flex-shrink-0" aria-hidden="true" />
-                <p className="text-emerald-300 text-sm font-body">{MENSAJE_SIN_MODIFICACIONES}</p>
-              </div>
-            )}
-            {!cmp.resumen.sinDiferencias && cmp.resumen.sinCambiosCantidad && (
-              <p className="text-surface-300 text-sm font-body" role="status">
-                Las cantidades no cambiaron (0 %), pero hubo cambios de precio o descuentos.
-              </p>
-            )}
-
-            <p className={ETIQUETA}>Detalle por artículo</p>
-            {visibles.length > 0
-              ? <Lineas lineas={visibles} mobile={isMobile} />
-              : <p className="text-surface-400 text-sm font-body py-6 text-center" role="status">No hay líneas con diferencias.</p>}
+            <section aria-label="Detalle por artículo" className="space-y-3">
+              <SeccionTitulo
+                aside={<span className="text-surface-500 text-xs font-mono tabular-nums">{visibles.length} de {cmp.lineas.length} líneas</span>}
+              >
+                Detalle por artículo
+              </SeccionTitulo>
+              {visibles.length > 0 ? (
+                <>
+                  <LineasTarjetas lineas={visibles} />
+                  <LineasTabla lineas={visibles} />
+                </>
+              ) : (
+                <Card>
+                  <EstadoVacio
+                    icono={CheckCircle2}
+                    titulo="No hay líneas con diferencias."
+                    accion={<Button variant="secondary" onClick={() => setSoloDiferencias(false)} className={TOUCH}>Ver todas las líneas</Button>}
+                  />
+                </Card>
+              )}
+            </section>
           </>
         )}
       </div>

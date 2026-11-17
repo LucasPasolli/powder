@@ -32,7 +32,7 @@ export function metodoPagoLabel(pedido) {
 export const ESTADO_CONFIG = {
   original:  { label: 'Original',  color: 'orange', icon: FileText },
   facturado: { label: 'Facturado', color: 'blue',   icon: ReceiptText },
-  recibido:  { label: 'Recibido',  color: 'violet', icon: Truck },
+  recibido:  { label: 'Recibido',  color: 'white',  icon: Truck },
 }
 
 export function EstadoLogisticoBadge({ pedido }) {
