@@ -1206,7 +1206,7 @@ export default function Saldos() {
           hint={`${kpis.cantPendientes} ${plural(kpis.cantPendientes, 'saldo', 'saldos')}`} />
 
         {kpis.cantVencidos > 0 ? (
-          <KpiCard label="Vencidos" icon={AlertTriangle} surface="red" value={fmtCompactoARS(kpis.vencidos)}
+          <KpiCard label="Vencidos" surface="red" value={fmtCompactoARS(kpis.vencidos)}
             valueClass="text-red-400"
             hint={`${kpis.cantVencidos} ${plural(kpis.cantVencidos, 'saldo vencido', 'saldos vencidos')}`} />
         ) : (
