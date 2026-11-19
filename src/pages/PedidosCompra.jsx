@@ -13,6 +13,7 @@ import {
   Pencil, RotateCcw, UserPlus, Building2, CalendarCheck,
   Layers, Landmark, Lock, Loader2, WifiOff,
   ReceiptText, PackageCheck, ArrowLeftRight,
+  ClipboardList, X,
 } from 'lucide-react'
 import {
   obtenerPedidos,
@@ -51,6 +52,12 @@ import FacturaPedidoForm from '../components/pedidos/FacturaPedidoForm'
 import RecepcionPedidoForm from '../components/pedidos/RecepcionPedidoForm'
 import ComparacionPedidoDialog from '../components/pedidos/ComparacionPedidoDialog'
 import { EtapasPedido } from '../components/pedidos/flujoUi'
+// Encargos de cliente: crear (Task 1) y añadir a un pedido / cancelar (Task 2).
+import EncargoFormDialog from '../components/encargos/EncargoFormDialog'
+import EncargosVista from '../components/encargos/EncargosVista'
+import SelectorEncargosPedido from '../components/encargos/SelectorEncargosPedido'
+import { useEncargosPendientes } from '../hooks/useEncargosPendientes'
+import { agregarEncargoAItems, quitarEncargoDeItems, nombreCompletoCliente, LIMITE_ENCARGOS_POR_PEDIDO } from '../lib/encargos'
 import {
   ESTADO, esAnteriorAlFlujo, puedeEditarLineas, puedeRegistrarFactura, puedeRegistrarRecepcion, puedeVerComparacion,
 } from '../lib/pedidoFlujo'
@@ -1186,6 +1193,39 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
 
   const dia30 = fechaVencimientoEcheck()
 
+  // ── Encargos de cliente (Task 2) ─────────────────────────────────────────
+  // Sólo en ALTA: añadir encargos incorpora sus productos a las líneas y, al guardar, el servidor
+  // los pasa a «En proceso» vinculados a este pedido en la MISMA transacción.
+  const [encargosAnadidos, setEncargosAnadidos] = useState([])
+  const [mostrarSelectorEncargos, setMostrarSelectorEncargos] = useState(false)
+  const [encargoConProblema, setEncargoConProblema] = useState(null) // id que el servidor rechazó
+  // ItemRow usa key=índice y guarda el texto del producto en estado local: al REEMPLAZAR líneas desde
+  // afuera (añadir/quitar un encargo) se remontan las filas para que muestren los datos nuevos.
+  const [versionLineas, setVersionLineas] = useState(0)
+
+  function anadirEncargos(lista) {
+    setMostrarSelectorEncargos(false)
+    if (!lista.length) return
+    setItems(prev => lista.reduce((acc, enc) => agregarEncargoAItems(acc, enc), prev))
+    setVersionLineas(v => v + 1)
+    setEncargosAnadidos(prev => [...prev, ...lista.filter(e => !prev.some(p => p.idEncargo === e.idEncargo))])
+    setErroresMedida({})
+    setError('')
+    setEncargoConProblema(null)
+    setToast(lista.length === 1 ? 'Encargo añadido al pedido ✓' : `${lista.length} encargos añadidos al pedido ✓`)
+  }
+
+  function quitarEncargo(enc) {
+    setItems(prev => {
+      const sig = quitarEncargoDeItems(prev, enc)
+      return sig.length ? sig : [ITEM_EMPTY()]
+    })
+    setVersionLineas(v => v + 1)
+    setEncargosAnadidos(prev => prev.filter(e => e.idEncargo !== enc.idEncargo))
+    setErroresMedida({})
+    setEncargoConProblema(prev => (prev === enc.idEncargo ? null : prev))
+  }
+
   function updateItem(idx, key, val) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, [key]: val } : it))
     // El error de medida de una línea se limpia apenas el usuario la corrige.
@@ -1302,13 +1342,17 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
         },
         detalles: detallesPayload,
         cuotas:   llevaCuotas ? cuotas : null,
+        // Encargos a vincular (alta). Forma parte de la huella de idempotencia.
+        idsEncargo: esEdicion ? [] : encargosAnadidos.map(e => e.idEncargo),
       }
 
       // UNA llamada, UNA transacción (cabecera + ítems + stock + cuotas).
       const idempotencyKey = idemRef.current.obtener(JSON.stringify(args))
       const guardado = await guardarPedido({ ...args, idempotencyKey })
-      onGuardado(guardado.idPedido)
+      onGuardado(guardado.idPedido, guardado)
     } catch (err) {
+      // El servidor rechazó un encargo (cancelado / ya en otro pedido): se lo marca para que se lo quite.
+      if (err?.code === 'encargo_no_disponible') setEncargoConProblema(Number(err.detalle) || null)
       // Mensaje ya traducido y seguro (GuardadoPedidoError). El formulario
       // conserva todos los datos cargados para poder reintentar.
       setError(err.message || 'Ocurrió un error al guardar el pedido.')
@@ -1349,6 +1393,14 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
   return (
     <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 animate-slide-up">
       {toast && <Toast message={toast} onDone={() => setToast('')} />}
+      {mostrarSelectorEncargos && (
+        <SelectorEncargosPedido
+          onClose={() => setMostrarSelectorEncargos(false)}
+          yaAnadidos={new Set(encargosAnadidos.map(e => e.idEncargo))}
+          cupo={LIMITE_ENCARGOS_POR_PEDIDO - encargosAnadidos.length}
+          onConfirmar={anadirEncargos}
+        />
+      )}
 
       <div className="flex items-center gap-3">
         <button onClick={onCancelar}
@@ -1486,10 +1538,40 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
 
       {/* Productos: grilla en escritorio, tarjetas apiladas en mobile/tablet */}
       <Card className="overflow-visible">
-        <div className="px-4 sm:px-6 py-4 border-b border-surface-700 flex items-center justify-between gap-3">
+        <div className="px-4 sm:px-6 py-4 border-b border-surface-700 flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-body font-semibold text-white text-sm">Productos</h2>
-          <Button size="sm" icon={Plus} onClick={addItem} disabled={hayCuotaPagada || saving} className={TOUCH}>Agregar ítem</Button>
+          <div className="flex flex-col min-[480px]:flex-row gap-2 w-full min-[480px]:w-auto">
+            {!esEdicion && (
+              <Button size="sm" variant="secondary" icon={ClipboardList} onClick={() => setMostrarSelectorEncargos(true)}
+                disabled={saving || encargosAnadidos.length >= LIMITE_ENCARGOS_POR_PEDIDO} className={TOUCH}>
+                Añadir Encargo(s)
+              </Button>
+            )}
+            <Button size="sm" icon={Plus} onClick={addItem} disabled={hayCuotaPagada || saving} className={TOUCH}>Agregar ítem</Button>
+          </div>
         </div>
+        {encargosAnadidos.length > 0 && (
+          <div className="px-4 sm:px-6 py-3 border-b border-surface-700 bg-surface-900/30">
+            <p className="text-surface-300 text-sm min-[1025px]:text-xs font-body mb-2">
+              Encargos incluidos en este pedido: al guardar pasarán a «En proceso».
+            </p>
+            <ul aria-label="Encargos incluidos en el pedido" className="flex flex-wrap gap-2">
+              {encargosAnadidos.map(e => (
+                <li key={e.idEncargo}
+                  className={`flex items-center gap-1 pl-3 rounded-full border text-sm font-body
+                    ${encargoConProblema === e.idEncargo ? 'border-red-500/60 bg-red-500/10 text-red-200' : 'border-brand-500/40 bg-brand-500/10 text-white'}`}>
+                  <span className="py-1 break-words min-w-0">#{e.idEncargo} · {nombreCompletoCliente(e.cliente)}</span>
+                  <button type="button" onClick={() => quitarEncargo(e)} disabled={saving}
+                    aria-label={`Quitar el encargo #${e.idEncargo} del pedido`}
+                    className="flex items-center justify-center min-h-[44px] min-w-[44px] rounded-full text-surface-300 hover:text-white
+                               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 disabled:opacity-40">
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className={isDesktop ? 'overflow-x-auto' : 'p-3'}>
           <div role={isDesktop ? 'table' : 'list'} aria-label="Productos del pedido"
             className={isDesktop ? 'min-w-[56rem]' : 'space-y-3'}>
@@ -1502,7 +1584,7 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
               </div>
             )}
             {items.map((item, idx) => (
-              <ItemRow key={idx} item={item} index={idx} onUpdate={updateItem} onRemove={removeItem}
+              <ItemRow key={`${versionLineas}-${idx}`} item={item} index={idx} onUpdate={updateItem} onRemove={removeItem}
                 disabled={hayCuotaPagada || saving} isDesktop={isDesktop}
                 errorMedida={erroresMedida[idx] ?? null} pedidoCerrado={pedidoCerrado} />
             ))}
@@ -1627,6 +1709,13 @@ export default function PedidosCompra() {
   const { isCompact } = useBreakpoint()
   const online = useOnlineStatus()
 
+  // Encargos de cliente: diálogo «Crear Encargo» (se abre desde la lista de pedidos o desde la de encargos)
+  // y contador de pendientes del botón «Ver Encargos».
+  const [crearEncargoAbierto, setCrearEncargoAbierto] = useState(false)
+  const [refrescoEncargos,     setRefrescoEncargos]     = useState(0)
+  const encargosPendientes = useEncargosPendientes(refrescoEncargos)
+  const refrescarEncargos = useCallback(() => setRefrescoEncargos(n => n + 1), [])
+
   // Deuda pendiente real: para pedidos CC fraccionada, sólo lo que falta
   // cobrar (sum de cuotas no pagadas) — no el monto total del pedido, que
   // no se mueve aunque ya se haya pagado una cuota. Para el resto de los
@@ -1654,12 +1743,25 @@ export default function PedidosCompra() {
   function abrirDetalle(p) { setSelected(p); setVista('detalle') }
   function volverLista()   { setSelected(null); setVista('lista'); load() }
 
-  function handleGuardado(id) {
+  function handleGuardado(id, guardado) {
     const isEdit = vista === 'editar'
-    setToast(isEdit ? `Pedido #${id} actualizado correctamente ✓` : `Pedido #${id} creado correctamente ✓`)
+    const n = guardado?.encargosVinculados ?? 0
+    const sufijo = n > 0 ? ` · ${n} ${n === 1 ? 'encargo pasó' : 'encargos pasaron'} a «En proceso»` : ''
+    setToast((isEdit ? `Pedido #${id} actualizado correctamente ✓` : `Pedido #${id} creado correctamente ✓`) + sufijo)
     setVista('lista')
     load()
+    if (n > 0) refrescarEncargos()
   }
+
+  function handleEncargoCreado(encargo) {
+    setCrearEncargoAbierto(false)
+    setToast(`Encargo #${encargo.idEncargo} creado correctamente ✓`)
+    refrescarEncargos()
+  }
+
+  const dialogoCrearEncargo = crearEncargoAbierto
+    ? <EncargoFormDialog onClose={() => setCrearEncargoAbierto(false)} onCreado={handleEncargoCreado} />
+    : null
 
   function handleUpdated() {
     setToast('Pedido actualizado ✓')
@@ -1682,6 +1784,21 @@ export default function PedidosCompra() {
 
   if (vista === 'nuevo')
     return <NuevoPedido onGuardado={handleGuardado} onCancelar={volverLista} />
+
+  if (vista === 'encargos')
+    return (
+      <>
+        {toast && <Toast message={toast} onDone={() => setToast('')} />}
+        <EncargosVista
+          onVolver={volverLista}
+          onCrear={() => setCrearEncargoAbierto(true)}
+          refrescarClave={refrescoEncargos}
+          onToast={setToast}
+          onCambioEstado={refrescarEncargos}
+        />
+        {dialogoCrearEncargo}
+      </>
+    )
 
   if (vista === 'editar' && selected)
     return <NuevoPedido onGuardado={handleGuardado} onCancelar={() => setVista('detalle')} pedidoEditando={selected} />
@@ -1736,10 +1853,26 @@ export default function PedidosCompra() {
           mobile → botón a ancho completo bajo el título; ≥ sm → a la derecha del encabezado. */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <PageHeader title="Pedidos de Compra" subtitle="Órdenes a proveedores" />
-        <Button icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('nuevo')}>
-          Nuevo Pedido
-        </Button>
+        {/* Mobile: botones apilados a ancho completo (≥ 44 px). ≥ sm: en fila y, si no entran, pasan a la línea siguiente. */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+          <Button variant="secondary" icon={ClipboardList} className="w-full sm:w-auto min-h-[44px] justify-center"
+            onClick={() => setCrearEncargoAbierto(true)}>
+            Crear Encargo
+          </Button>
+          <Button variant="secondary" className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('encargos')}>
+            Ver Encargos
+            {encargosPendientes > 0 && (
+              <span className="ml-2 inline-flex min-w-[1.5rem] justify-center rounded-full bg-yellow-500/20 border border-yellow-500/40 px-1.5 text-xs text-yellow-300 font-mono">
+                {encargosPendientes}<span className="sr-only"> pendientes</span>
+              </span>
+            )}
+          </Button>
+          <Button icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('nuevo')}>
+            Nuevo Pedido
+          </Button>
+        </div>
       </div>
+      {dialogoCrearEncargo}
 
       {/* Resumen: mismas tarjetas que Saldos — 2 columnas en mobile (la primera ocupa el ancho
           completo para que «Deuda» y «Pagado» queden lado a lado), 3 columnas desde tablet. */}
