@@ -1,6 +1,6 @@
 // src/hooks/useEncargosPendientes.js
 /**
- * Cantidad de encargos «Pendiente» para el contador del botón «Ver Encargos».
+ * Cantidad de encargos «Pendiente» para el contador del botón «Encargos».
  * Es decorativo: si la consulta falla (sin red, sin permisos, migración sin aplicar) devuelve
  * `null` y la pantalla simplemente no muestra el número — nunca bloquea el módulo de pedidos.
  *

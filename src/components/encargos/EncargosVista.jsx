@@ -1,61 +1,71 @@
 // src/components/encargos/EncargosVista.jsx
-// Pantalla «Encargos de clientes» dentro del módulo de Pedidos de Compra.
+// Apartado «Encargos» dentro del módulo de Pedidos de Compra.
+// Es DUEÑO del flujo de alta: «Nuevo encargo» (CTA primario) abre el diálogo de creación y, al guardar,
+// se vuelve al listado con el registro nuevo visible (filtros limpios, página 1, recarga).
 // Filtro por estado (servidor) + búsqueda de texto (memoria) + paginación, con el mismo
 // comportamiento que el listado de pedidos (usePaginatedList: reload no resetea la página).
+// Mismo encabezado, filtros, listado y paginador que Pedidos de Compra.
 
-import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ClipboardList, Search, WifiOff } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowLeft, Plus, WifiOff } from 'lucide-react'
 import { Button, PageHeader } from '../ui'
 import PaginadorListado from '../ui/PaginadorListado'
 import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOnlineStatus } from '../../hooks/useOnlineStatus'
+import { useBreakpoint } from '../../hooks/useBreakpoint'
 import { useScrollAnchor } from '../../hooks/useScrollToTopOnChange'
 import { obtenerEncargos } from '../../services/encargosService'
-import { ESTADOS_ENCARGO, ETIQUETA_ESTADO_ENCARGO, filtrarEncargos } from '../../lib/encargos'
+import { filtrarEncargos } from '../../lib/encargos'
 import { TOUCH } from '../pedidos/pedidosPresentacion'
+import FiltrosEncargos, { FILTROS_ENCARGOS_INICIALES, hayFiltrosEncargos } from './FiltrosEncargos'
 import EncargosListado from './EncargosListado'
+import EncargoFormDialog from './EncargoFormDialog'
 import CancelarEncargoDialog from './CancelarEncargoDialog'
 
 const PAGE_SIZE = 20
-const FILTROS_ESTADO = [{ valor: 'all', etiqueta: 'Todos' }, ...ESTADOS_ENCARGO.map((e) => ({ valor: e, etiqueta: ETIQUETA_ESTADO_ENCARGO[e] }))]
 
 /**
  * @param {object} props
- * @param {()=>void} props.onVolver
- * @param {()=>void} props.onCrear                 Abre el diálogo «Crear Encargo» (lo gestiona el padre).
- * @param {number} props.refrescarClave            Cambia cuando el padre creó/modificó encargos → recarga.
+ * @param {()=>void} props.onVolver                Vuelve a Pedidos de Compra.
  * @param {(mensaje:string)=>void} props.onToast
  * @param {()=>void} props.onCambioEstado          Avisa al padre para refrescar el contador de pendientes.
  */
-export default function EncargosVista({ onVolver, onCrear, refrescarClave, onToast, onCambioEstado }) {
+export default function EncargosVista({ onVolver, onToast, onCambioEstado }) {
   const online = useOnlineStatus()
-  const [estado, setEstado] = useState('all')
-  const [texto, setTexto] = useState('')
+  const { isCompact } = useBreakpoint()
+  const [filtros, setFiltros] = useState({ ...FILTROS_ENCARGOS_INICIALES })
+  const [creando, setCreando] = useState(false)
   const [aCancelar, setACancelar] = useState(null)
   const { anchorRef, scrollToStart } = useScrollAnchor()
 
   const { pageItems: pagina, items: filtrados, rawItems, page, setPage, totalPages: paginas, loading, error, reload } = usePaginatedList({
     fetcher: (f) => obtenerEncargos({ estado: f.estado !== 'all' ? f.estado : null }),
-    serverFilters: { estado },
-    clientFilters: { texto },
+    serverFilters: { estado: filtros.estado },
+    clientFilters: { texto: filtros.texto },
     // Búsqueda en memoria (sin tildes, varias palabras): el hook resetea la página al cambiar el texto.
     clientFilter: (e, cf) => filtrarEncargos([e], cf.texto).length > 0,
     pageSize: PAGE_SIZE,
   })
 
-  // El padre creó un encargo (o vinculó/canceló): recarga SIN resetear la página.
-  const primera = useRef(true)
-  useEffect(() => {
-    if (primera.current) { primera.current = false; return }
-    reload()
-  }, [refrescarClave]) // eslint-disable-line react-hooks/exhaustive-deps
+  const hayFiltros = hayFiltrosEncargos(filtros)
+  const limpiarFiltros = () => { setFiltros({ ...FILTROS_ENCARGOS_INICIALES }); setPage(1) }
 
-  const hayFiltros = estado !== 'all' || texto.trim() !== ''
+  // Alta guardada: se cierra el diálogo y se vuelve al listado mostrando el nuevo registro
+  // (el más reciente va primero; con filtros activos podría quedar oculto, por eso se limpian).
+  function handleCreado(encargo) {
+    setCreando(false)
+    onToast(`Encargo #${encargo.idEncargo} creado correctamente ✓`)
+    if (hayFiltros) setFiltros({ ...FILTROS_ENCARGOS_INICIALES }) // cambia el filtro → refetch + página 1
+    else reload()
+    setPage(1)
+    onCambioEstado()
+  }
 
   return (
     <div className="w-full min-w-0 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       <button type="button" onClick={onVolver}
-        className="flex items-center gap-2 -ml-2 px-2 min-h-[44px] min-[1025px]:min-h-0 text-surface-300 hover:text-white text-sm font-body transition-colors">
+        className={`flex items-center gap-2 -ml-2 px-2 ${TOUCH} text-surface-300 hover:text-white text-sm font-body transition-colors
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 rounded-lg`}>
         <ArrowLeft size={16} aria-hidden="true" />Volver a pedidos
       </button>
 
@@ -66,46 +76,29 @@ export default function EncargosVista({ onVolver, onCrear, refrescarClave, onToa
         </div>
       )}
 
+      {/* Misma disposición que «Nuevo Pedido» (Pedidos) y «Nuevo Producto» (Inventario):
+          mobile → CTA a ancho completo bajo el título; ≥ sm → a la derecha del encabezado.
+          «Nuevo encargo» es la ÚNICA acción con estilo primario de la pantalla. */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-        <PageHeader title="Encargos de clientes" subtitle="Mercadería solicitada por clientes" />
-        <Button icon={ClipboardList} className={`w-full sm:w-auto ${TOUCH}`} onClick={onCrear}>Crear Encargo</Button>
+        <PageHeader title="Encargos" subtitle="Mercadería solicitada por clientes" />
+        <Button icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setCreando(true)}>
+          Nuevo encargo
+        </Button>
       </div>
 
-      <div className="space-y-3">
-        <div role="group" aria-label="Filtrar por estado" className="flex flex-wrap gap-2">
-          {FILTROS_ESTADO.map((f) => (
-            <button key={f.valor} type="button" aria-pressed={estado === f.valor}
-              onClick={() => { setEstado(f.valor); setPage(1) }}
-              className={`px-4 ${TOUCH} rounded-xl text-sm font-body border transition-all
-                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
-                ${estado === f.valor ? 'bg-brand-500/15 border-brand-500/40 text-white' : 'bg-surface-700 border-surface-600 text-surface-300 hover:border-surface-500'}`}>
-              {f.etiqueta}
-            </button>
-          ))}
-        </div>
-        <div className="relative">
-          <label htmlFor="busqueda-encargos" className="sr-only">Buscar encargos por cliente, producto o número</label>
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500 pointer-events-none" aria-hidden="true" />
-          <input id="busqueda-encargos" type="search" value={texto} maxLength={60} autoComplete="off"
-            onChange={(e) => { setTexto(e.target.value); setPage(1) }}
-            placeholder="Buscar por cliente, producto o número"
-            className="w-full bg-surface-700 border border-surface-600 rounded-xl pl-10 pr-3 min-h-[44px] text-white text-base min-[1025px]:text-sm font-body
-                       placeholder:text-surface-500 focus:outline-none focus:border-brand-500 focus-visible:ring-2 focus-visible:ring-brand-500/40" />
-        </div>
-        <p role="status" aria-live="polite" className="text-surface-400 text-sm min-[1025px]:text-xs font-body">
-          {loading ? '' : `${filtrados.length} ${filtrados.length === 1 ? 'encargo' : 'encargos'}`}
-        </p>
-      </div>
+      <FiltrosEncargos value={filtros} onChange={setFiltros} compact={isCompact} total={filtrados.length} />
 
+      {/* Listado + paginador en UN solo Card (igual que Pedidos e Inventario). El ancla marca el inicio de la lista. */}
       <div ref={anchorRef}>
         <EncargosListado
           encargos={pagina} totalSinFiltrar={rawItems.length} loading={loading} error={error} onRetry={reload}
-          onCancelar={setACancelar} hayFiltros={hayFiltros} onCrear={onCrear}
-          onLimpiarFiltros={() => { setEstado('all'); setTexto(''); setPage(1) }}
+          onCancelar={setACancelar} hayFiltros={hayFiltros} onLimpiarFiltros={limpiarFiltros}
           footer={<PaginadorListado page={page} totalPages={paginas} pageSize={PAGE_SIZE} total={filtrados.length}
             onChange={(n) => { setPage(n); scrollToStart() }} />}
         />
       </div>
+
+      {creando && <EncargoFormDialog onClose={() => setCreando(false)} onCreado={handleCreado} />}
 
       {aCancelar && (
         <CancelarEncargoDialog

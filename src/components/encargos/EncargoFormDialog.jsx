@@ -148,7 +148,7 @@ export default function EncargoFormDialog({ onClose, onCreado }) {
 
   return (
     <ResponsiveDialog
-      open onClose={pedirCerrar} title="Crear Encargo" icon={ClipboardList} busy={saving}
+      open onClose={pedirCerrar} title="Nuevo encargo" icon={ClipboardList} busy={saving}
       subtitle="Registrá lo que un cliente necesita para incluirlo luego en un pedido a proveedor."
       footer={pie}
     >

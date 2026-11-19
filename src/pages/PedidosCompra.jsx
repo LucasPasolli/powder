@@ -53,7 +53,6 @@ import RecepcionPedidoForm from '../components/pedidos/RecepcionPedidoForm'
 import ComparacionPedidoDialog from '../components/pedidos/ComparacionPedidoDialog'
 import { EtapasPedido } from '../components/pedidos/flujoUi'
 // Encargos de cliente: crear (Task 1) y añadir a un pedido / cancelar (Task 2).
-import EncargoFormDialog from '../components/encargos/EncargoFormDialog'
 import EncargosVista from '../components/encargos/EncargosVista'
 import SelectorEncargosPedido from '../components/encargos/SelectorEncargosPedido'
 import { useEncargosPendientes } from '../hooks/useEncargosPendientes'
@@ -1709,9 +1708,8 @@ export default function PedidosCompra() {
   const { isCompact } = useBreakpoint()
   const online = useOnlineStatus()
 
-  // Encargos de cliente: diálogo «Crear Encargo» (se abre desde la lista de pedidos o desde la de encargos)
-  // y contador de pendientes del botón «Ver Encargos».
-  const [crearEncargoAbierto, setCrearEncargoAbierto] = useState(false)
+  // Encargos de cliente: la creación vive dentro del apartado «Encargos» (EncargosVista);
+  // acá sólo se mantiene el contador de pendientes del botón «Encargos».
   const [refrescoEncargos,     setRefrescoEncargos]     = useState(0)
   const encargosPendientes = useEncargosPendientes(refrescoEncargos)
   const refrescarEncargos = useCallback(() => setRefrescoEncargos(n => n + 1), [])
@@ -1753,16 +1751,6 @@ export default function PedidosCompra() {
     if (n > 0) refrescarEncargos()
   }
 
-  function handleEncargoCreado(encargo) {
-    setCrearEncargoAbierto(false)
-    setToast(`Encargo #${encargo.idEncargo} creado correctamente ✓`)
-    refrescarEncargos()
-  }
-
-  const dialogoCrearEncargo = crearEncargoAbierto
-    ? <EncargoFormDialog onClose={() => setCrearEncargoAbierto(false)} onCreado={handleEncargoCreado} />
-    : null
-
   function handleUpdated() {
     setToast('Pedido actualizado ✓')
     load()
@@ -1791,12 +1779,9 @@ export default function PedidosCompra() {
         {toast && <Toast message={toast} onDone={() => setToast('')} />}
         <EncargosVista
           onVolver={volverLista}
-          onCrear={() => setCrearEncargoAbierto(true)}
-          refrescarClave={refrescoEncargos}
           onToast={setToast}
           onCambioEstado={refrescarEncargos}
         />
-        {dialogoCrearEncargo}
       </>
     )
 
@@ -1855,12 +1840,10 @@ export default function PedidosCompra() {
         <PageHeader title="Pedidos de Compra" subtitle="Órdenes a proveedores" />
         {/* Mobile: botones apilados a ancho completo (≥ 44 px). ≥ sm: en fila y, si no entran, pasan a la línea siguiente. */}
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-          <Button variant="secondary" icon={ClipboardList} className="w-full sm:w-auto min-h-[44px] justify-center"
-            onClick={() => setCrearEncargoAbierto(true)}>
-            Crear Encargo
-          </Button>
-          <Button variant="secondary" className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('encargos')}>
-            Ver Encargos
+          {/* Navega al apartado Encargos (no crea nada). Conserva el ícono que tenía «Nuevo encargo»
+              y el contador de pendientes. La alta se hace desde adentro del apartado. */}
+          <Button variant="secondary" icon={ClipboardList} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('encargos')}>
+            Encargos
             {encargosPendientes > 0 && (
               <span className="ml-2 inline-flex min-w-[1.5rem] justify-center rounded-full bg-yellow-500/20 border border-yellow-500/40 px-1.5 text-xs text-yellow-300 font-mono">
                 {encargosPendientes}<span className="sr-only"> pendientes</span>
@@ -1872,7 +1855,6 @@ export default function PedidosCompra() {
           </Button>
         </div>
       </div>
-      {dialogoCrearEncargo}
 
       {/* Resumen: mismas tarjetas que Saldos — 2 columnas en mobile (la primera ocupa el ancho
           completo para que «Deuda» y «Pagado» queden lado a lado), 3 columnas desde tablet. */}
