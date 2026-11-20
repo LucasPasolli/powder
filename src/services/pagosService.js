@@ -11,6 +11,7 @@
 // solo para UX) que replica la misma regla de negocio.
 
 import { supabase } from '../lib/supabase'
+import { hoyISO } from '../lib/fechas'
 import { obtenerSaldosPendientesDeCliente } from './saldosService'
 
 const METODOS_VALIDOS = ['efectivo', 'transferencia', 'cheque', 'otro']
@@ -162,7 +163,7 @@ export async function registrarPagoParcial({
   }
 
   const metodo     = METODOS_VALIDOS.includes(metodoPago) ? metodoPago : 'efectivo'
-  const fechaPago  = fecha ?? new Date().toISOString().slice(0, 10)
+  const fechaPago  = fecha ?? hoyISO()
   const desc       = sanitizarTexto(descripcion, 300)
 
   const { data, error } = await supabase.rpc('fn_aplicar_pago_cliente', {

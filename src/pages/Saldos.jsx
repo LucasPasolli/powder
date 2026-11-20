@@ -1,5 +1,5 @@
 // src/pages/Saldos.jsx
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { usePaginatedList } from '../hooks/usePaginatedList'
 import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
@@ -7,7 +7,7 @@ import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { useDebounce } from '../hooks/useDebounce'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import {
-  obtenerSaldos,
+  obtenerSaldosPagina,
   obtenerKPIsSaldos,
   marcarSaldoPagado,
 } from '../services/saldosService'
@@ -25,10 +25,19 @@ import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
 import FiltrosMovil, { BuscadorListado } from '../components/ui/FiltrosMovil'
 import KpiCard from '../components/ui/KpiCard'
 import PaginadorListado from '../components/ui/PaginadorListado'
+import DateField from '../components/ui/DateField'
+import { ALTO_CONTROL, CLASE_ETIQUETA } from '../components/ui/controles'
 import { useBreakpoint } from '../hooks/useBreakpoint'
+import { useRangoFechaAplicado } from '../hooks/useRangoFechaAplicado'
+import { hoyISO, formatearFechaDMA } from '../lib/fechas'
 import {
-  ArrowLeft, Wallet, Clock, CheckCircle2, AlertTriangle,
-  CalendarClock, User, FileText, BadgeCheck, Search, ChevronDown, ChevronUp,
+  CAMPO_FECHA_PAGO, ORDEN_DEFAULT,
+  alternarOrdenFechaPago, normalizarOrden, opcionesOrden, ordenPorDefecto, parseOrden, permiteOrdenFechaPago,
+  validarRangoFechaPago,
+} from '../lib/saldosFiltros'
+import {
+  ArrowLeft, Wallet, Clock, CheckCircle2, AlertTriangle, AlertCircle,
+  CalendarClock, User, FileText, BadgeCheck, Search, ChevronDown, ChevronUp, ChevronsUpDown, ArrowRight, ArrowUpDown,
   Coins, Loader2, X, History, Eye, WifiOff,
 } from 'lucide-react'
 
@@ -38,13 +47,11 @@ function fmt(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n ?? 0)
 }
 
-function fmtFecha(iso) {
-  if (!iso) return '—'
-  const [y, m, d] = iso.split('-')
-  return `${d}/${m}/${y}`
-}
+// dd/mm/aaaa o «—» (nulo, vacío o inválido). Reordena texto: sin `new Date`, sin desfase de huso.
+const fmtFecha = (iso) => formatearFechaDMA(iso)
 
-function today() { return new Date().toISOString().slice(0, 10) }
+// «Hoy» en America/Argentina/Buenos_Aires (no en UTC: después de las 21:00 locales UTC ya es mañana).
+const today = hoyISO
 
 function diasRestantes(fechaFin) {
   const hoy  = new Date(today())
@@ -402,7 +409,7 @@ function SaldoDetalle({ saldo, onBack, onUpdated }) {
   async function marcarPagado() {
     // Cancela el remanente completo (sirve tanto para un saldo pendiente
     // como para saldar de una vez lo que quedaba de un pago parcial)
-    const hoy = new Date().toISOString().slice(0, 10)
+    const hoy = hoyISO()
     await marcarSaldoPagado(saldo.idSaldo, saldo.idPresupuesto, hoy, metodoCierre)
     setConfirmPago(false)
     onUpdated('Saldo marcado como pagado')
@@ -708,9 +715,14 @@ function SaldoDetalle({ saldo, onBack, onUpdated }) {
 //        └─ SaldosTable     (≥768px)  en tablet se colapsan columnas secundarias
 //
 // Ambos layouts consumen el MISMO array `paginated` y el MISMO `onOpen`, y el
-// filtrado ocurre en el fetcher (una sola vez, antes de paginar). Por eso el
+// filtrado y la paginación ocurren en el servidor (una sola vez). Por eso el
 // comportamiento y los resultados son idénticos en cualquier dispositivo
 // (Escenario 6). Breakpoints Tailwind: sm 640 · md 768 · lg 1024.
+//
+// «Fecha de pago» (rango + orden): el filtro y el ORDER BY los resuelve la base (saldosService),
+// por eso totales y paginación se recalculan solos sobre el resultado filtrado. El estado de
+// filtros vive en este contenedor, que NO se desmonta al abrir un detalle (se alterna con
+// `selected`): al volver se conservan filtros, orden y página.
 
 const ESTADOS = [
   { value: 'pendiente', label: 'Pendientes' },
@@ -724,12 +736,17 @@ const ESTADO_DEFAULT = 'pendiente'
 const FILTROS_INICIALES = Object.freeze({
   search:     '',
   estado:     ESTADO_DEFAULT,
-  sortDias:   'asc',
+  orden:      ORDEN_DEFAULT,   // 'urgencia:asc' | 'urgencia:desc' | 'fechaPago:asc' | 'fechaPago:desc'
+  pagoDesde:  '',              // AAAA-MM-DD o '' (sin extremo)
+  pagoHasta:  '',
 })
 
-/** Cantidad de filtros distintos del valor por defecto (alimenta el badge de «Filtros» en mobile). */
-function contarFiltrosActivos({ search, estado }) {
-  return (search.trim() ? 1 : 0) + (estado !== ESTADO_DEFAULT ? 1 : 0)
+/** Cantidad de filtros distintos del valor por defecto (alimenta el badge de «Limpiar» en escritorio). */
+function contarFiltrosActivos({ search, estado, pagoDesde, pagoHasta }) {
+  return (search.trim() ? 1 : 0)
+    + (estado !== ESTADO_DEFAULT ? 1 : 0)
+    + (pagoDesde ? 1 : 0)
+    + (pagoHasta ? 1 : 0)
 }
 
 // Controles táctiles: alto mínimo 44px (WCAG 2.5.5 / HIG) y 16px de fuente en
@@ -744,6 +761,7 @@ const LABEL_CLASS = 'text-surface-400 text-xs uppercase tracking-widest font-bod
 /** Deriva todo lo que la fila y la tarjeta necesitan, en un solo lugar (DRY). */
 function derivarSaldo(s) {
   const dias        = diasRestantes(s.fechaVto)
+  const fechaPago   = fmtFecha(s.fechaPago)
   const estaSaldado = s.estado === 'pagado'
   const nombre      = `${s.clienteNombre ?? ''} ${s.clienteApellido ?? ''}`.trim()
   return {
@@ -754,6 +772,9 @@ function derivarSaldo(s) {
     info:         estadoInfo(s.estado),
     montoVisible: estaSaldado ? s.monto : s.montoPendiente,
     nombre:       nombre || `Cliente #${s.idCliente}`,
+    // dd/mm/aaaa o «—» si el saldo aún no se pagó / no tiene fecha registrada (Escenarios 1-3).
+    fechaPago,
+    tienePago:    fechaPago !== '—',
   }
 }
 
@@ -814,15 +835,28 @@ function EmptyState({ estado, hayFiltros, onClear }) {
 // visible + botón «Filtros»; Estado y Orden viven en el panel con borrador (Limpiar / Aplicar).
 // Escritorio (> 1024px): una sola fila con buscador (flexible) + estados + orden, sin cambios.
 
-const ORDEN_DEFAULT = FILTROS_INICIALES.sortDias
-
 const CAMPOS_FILTROS_MOVIL = [
   { tipo: 'chips', clave: 'estado', etiqueta: 'Estado', opciones: ESTADOS },
-  // «Cobrados» no tiene urgencia: el orden sólo aplica al resto (igual que en escritorio).
-  { tipo: 'chips', clave: 'sortDias', etiqueta: 'Orden', visible: (b) => b.estado !== 'pagado',
-    opciones: [{ value: 'asc', label: 'Más urgentes' }, { value: 'desc', label: 'Menos urgentes' }] },
+  // «Cobrados» no tiene urgencia: ahí solo se ofrece el orden por fecha de pago (igual que en escritorio).
+  { tipo: 'chips', clave: 'orden', etiqueta: 'Orden', opciones: (b) => opcionesOrden(b.estado) },
+  // Sin `min`/`max` a propósito: un rango invertido tiene que poder escribirse para que aparezca
+  // el mensaje de error y el botón «Aplicar» quede deshabilitado (Escenario 6).
+  { tipo: 'fecha', clave: 'pagoDesde', etiqueta: 'Fecha de pago desde' },
+  { tipo: 'fecha', clave: 'pagoHasta', etiqueta: 'Fecha de pago hasta' },
 ]
-const DEFAULTS_FILTROS_MOVIL = Object.freeze({ estado: ESTADO_DEFAULT, sortDias: ORDEN_DEFAULT })
+const DEFAULTS_FILTROS_MOVIL = Object.freeze({
+  estado: ESTADO_DEFAULT, orden: ORDEN_DEFAULT, pagoDesde: '', pagoHasta: '',
+})
+const validarFiltrosMovil = (b) => validarRangoFechaPago(b.pagoDesde, b.pagoHasta)
+// El orden cuenta como filtro activo solo si difiere del que corresponde por defecto al estado elegido.
+const contarFiltrosMovil = (v) =>
+  (v.estado !== ESTADO_DEFAULT ? 1 : 0)
+  + (v.orden !== ordenPorDefecto(v.estado) ? 1 : 0)
+  + (v.pagoDesde ? 1 : 0)
+  + (v.pagoHasta ? 1 : 0)
+// Campos dependientes: al cambiar el estado en el borrador, el orden se ajusta a las opciones válidas.
+const reglaFiltrosMovil = (clave, _valor, siguiente) =>
+  clave === 'estado' ? { ...siguiente, orden: normalizarOrden(siguiente.orden, siguiente.estado) } : siguiente
 
 function SaldosFilters(props) {
   const { isCompact } = useBreakpoint()
@@ -830,17 +864,25 @@ function SaldosFilters(props) {
 }
 
 function SaldosFiltersMovil({ filters, onChange, total }) {
-  const { search, estado, sortDias } = filters
+  const { search, estado, orden, pagoDesde, pagoHasta } = filters
   return (
     <FiltrosMovil
       busqueda={(
         <BuscadorListado value={search} onChange={(texto) => onChange('search', texto)}
           placeholder="Buscar por cliente o ID..." etiqueta="Buscar por cliente o ID" />
       )}
-      value={{ estado, sortDias }}
+      value={{ estado, orden, pagoDesde, pagoHasta }}
       defaults={DEFAULTS_FILTROS_MOVIL}
       campos={CAMPOS_FILTROS_MOVIL}
-      onApply={(b) => { onChange('estado', b.estado); onChange('sortDias', b.sortDias) }}
+      validar={validarFiltrosMovil}
+      alCambiar={reglaFiltrosMovil}
+      contar={contarFiltrosMovil}
+      onApply={(b) => {
+        onChange('estado', b.estado)
+        onChange('orden', normalizarOrden(b.orden, b.estado))
+        onChange('pagoDesde', b.pagoDesde)
+        onChange('pagoHasta', b.pagoHasta)
+      }}
       debajo={(
         <p role="status" aria-live="polite" className="sr-only">
           {total} resultado{total !== 1 ? 's' : ''}
@@ -850,79 +892,148 @@ function SaldosFiltersMovil({ filters, onChange, total }) {
   )
 }
 
-function SaldosFiltersEscritorio({ filters, onChange, onClear, filtrosActivos, total }) {
-  const { search, estado, sortDias } = filters
+const CLASE_LIMPIAR =
+  `inline-flex items-center gap-1.5 ${ALTO_CONTROL} px-3 rounded-xl whitespace-nowrap flex-shrink-0 ` +
+  'text-sm font-body text-surface-300 hover:text-white hover:bg-surface-700/60 transition-colors'
 
-  // Todo vive en UNA sola fila: buscador (flexible) + estados + orden.
+function ContenidoLimpiar({ cantidad }) {
+  return (
+    <>
+      <X size={14} aria-hidden="true" />
+      Limpiar filtros
+      <span aria-hidden="true" className="min-w-[1.25rem] px-1.5 rounded-full bg-brand-500/20 text-brand-300 text-xs tabular-nums text-center">
+        {cantidad}
+      </span>
+    </>
+  )
+}
+
+/**
+ * Control segmentado: UN solo control con varias opciones excluyentes (en vez de N botones sueltos).
+ * Se usa para un conjunto chico y fijo de opciones (2–4), como el estado del saldo.
+ */
+function ControlSegmentado({ etiqueta, opciones, valor, onChange }) {
+  return (
+    <div role="group" aria-label={etiqueta}
+      className={`inline-grid grid-flow-col auto-cols-fr gap-0.5 p-[3px] flex-shrink-0 ${ALTO_CONTROL}
+                  bg-surface-700/60 border border-surface-600 rounded-xl`}>
+      {opciones.map(({ value, label }) => {
+        const activo = valor === value
+        return (
+          <button key={value} type="button" aria-pressed={activo} onClick={() => onChange(value)}
+            className={`px-4 rounded-[9px] text-sm font-body whitespace-nowrap transition-colors
+                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
+                        ${activo
+                          ? 'bg-brand-500/20 text-white ring-1 ring-inset ring-brand-500/50'
+                          : 'text-surface-300 hover:text-white hover:bg-surface-600/50'}`}>
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * Filtros de escritorio (≥1025px). Jerarquía en dos niveles:
+ *   1) PRIMARIO  — «¿qué busco?»: buscador + estado (control segmentado).
+ *   2) SECUNDARIO — afinar y ordenar: rango de fecha de pago a la izquierda; a la derecha
+ *      «Ordenar por» (selector rotulado, con la dirección incluida en cada opción) y «Limpiar filtros».
+ * Filtrar y ordenar usan controles de distinta forma a propósito: no se confunden entre sí.
+ */
+function SaldosFiltersEscritorio({ filters, onChange, onClear, filtrosActivos, total, errorRango }) {
+  const { search, estado, orden, pagoDesde, pagoHasta } = filters
+  const ID_ERROR_PAGO = 'saldos-pago-error'
   const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40'
 
-  return (
-    <Card className="p-4">
-      <div className="flex flex-row items-center gap-2.5">
+  // Las opciones dependen del estado; `orden` ya llega normalizado desde el contenedor.
+  const opciones = opcionesOrden(estado)
+  const valorOrden = normalizarOrden(orden, estado)
 
-        {/* Buscador */}
-        <div className="flex gap-2 min-w-0 flex-1">
-          <div className="relative flex-1 min-w-0">
-            <Search size={14} aria-hidden="true"
-              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
-            <input
-              type="search" inputMode="search" enterKeyHint="search" autoComplete="off"
-              aria-label="Buscar por cliente o ID"
-              value={search} onChange={e => onChange('search', e.target.value)}
-              placeholder="Buscar por cliente o ID..."
-              className={`${FIELD_CLASS} md:min-h-[38px] pl-9 pr-3`} />
-          </div>
+  const describedBy = errorRango ? ID_ERROR_PAGO : undefined
+  const invalido = errorRango ? true : undefined
+
+  return (
+    <Card className="p-4 space-y-3">
+
+      {/* Nivel 1 · primario */}
+      <div className="flex flex-row items-center gap-3">
+        <div className="relative flex-1 min-w-0">
+          <Search size={14} aria-hidden="true"
+            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
+          <input
+            type="search" inputMode="search" enterKeyHint="search" autoComplete="off"
+            aria-label="Buscar por cliente o ID"
+            value={search} onChange={e => onChange('search', e.target.value)}
+            placeholder="Buscar por cliente o ID..."
+            className={`${FIELD_CLASS} min-[1025px]:min-h-0 min-[1025px]:h-[42px] pl-9 pr-3`} />
+        </div>
+        <ControlSegmentado etiqueta="Estado" opciones={ESTADOS} valor={estado}
+          onChange={(v) => onChange('estado', v)} />
+      </div>
+
+      {/* Nivel 2 · secundario (separado por una línea fina): rango de fechas a la izquierda; a la derecha,
+          «Limpiar filtros» + «Ordenar por», con el selector SIEMPRE contra el margen derecho.
+          El bloque derecho usa `grow` + `justify-end`: en una línea compartida ocupa el hueco sobrante y
+          alinea su contenido a la derecha; si por zoom/ancho no cabe y baja de línea, ocupa toda su línea
+          y el selector sigue pegado al margen derecho (nunca queda a medio camino ni con sangría). */}
+      <div className="flex flex-row flex-wrap items-center gap-x-6 gap-y-3 pt-3 border-t border-surface-700/70">
+
+        {/* IZQUIERDA — rango de fecha de pago: un grupo rotulado, «Desde → Hasta» (campos compactos) */}
+        <div role="group" aria-labelledby="saldos-pago-leyenda" className="flex flex-row flex-wrap items-center gap-2.5">
+          <span id="saldos-pago-leyenda" className={`${CLASE_ETIQUETA} whitespace-nowrap mr-0.5`}>Fecha de pago</span>
+          <DateField compacto id="saldos-pago-desde" label="Desde" title="Fecha de pago desde" value={pagoDesde} className="w-44"
+            onChange={(v) => onChange('pagoDesde', v)} aria-invalid={invalido} aria-describedby={describedBy} />
+          <ArrowRight size={16} aria-hidden="true" className="text-surface-400 flex-shrink-0" />
+          <DateField compacto id="saldos-pago-hasta" label="Hasta" title="Fecha de pago hasta" value={pagoHasta} className="w-44"
+            onChange={(v) => onChange('pagoHasta', v)} aria-invalid={invalido} aria-describedby={describedBy} />
         </div>
 
-        {/* Estados + orden (misma fila que el buscador) */}
-        <div id="saldos-filtros" className="flex flex-row items-center gap-2.5 flex-shrink-0">
+        {/* DERECHA — «Limpiar filtros» (a la izquierda del selector) y «Ordenar por» (contra el margen) */}
+        <div className="flex grow flex-row flex-nowrap items-center justify-end gap-3">
 
-          <div>
-            <span id="saldos-estado-label" className={`${LABEL_CLASS} sr-only`}>Estado</span>
-            <div role="group" aria-labelledby="saldos-estado-label" className="flex flex-nowrap gap-2.5">
-              {ESTADOS.map(({ value, label }) => {
-                const activo = estado === value
-                return (
-                  <button key={value} type="button" aria-pressed={activo} onClick={() => onChange('estado', value)}
-                    className={`min-h-[44px] md:min-h-[38px] px-4 rounded-xl text-sm font-body border transition-all whitespace-nowrap ${FOCUS}
-                      ${activo
-                        ? 'bg-brand-500/15 border-brand-500/50 text-white'
-                        : 'bg-surface-700/60 border-surface-600/70 text-surface-500 hover:border-surface-500 active:bg-surface-600'}`}>
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          {/* «Limpiar filtros» RESERVA su lugar aunque no haya filtros: si apareciera/desapareciera, el ancho
+              de este bloque cambiaría y podría saltar de línea. Sin filtros se muestra un espacio invisible
+              (fuera del árbol de accesibilidad); con filtros, el botón real. */}
+          {filtrosActivos > 0 ? (
+            <button type="button" onClick={onClear} className={`${CLASE_LIMPIAR} ${FOCUS}`}>
+              <ContenidoLimpiar cantidad={filtrosActivos} />
+            </button>
+          ) : (
+            <span aria-hidden="true" className={`${CLASE_LIMPIAR} invisible`}>
+              <ContenidoLimpiar cantidad={0} />
+            </span>
+          )}
 
-          <div className="flex flex-row items-center gap-2.5">
-            {estado !== 'pagado' && (
-              <button type="button" onClick={() => onChange('sortDias', sortDias === 'asc' ? 'desc' : 'asc')}
-                className={`flex items-center justify-center gap-2 min-h-[44px] md:min-h-[38px] px-4 bg-surface-700/60 border border-surface-600/70
-                           hover:border-surface-500 active:bg-surface-600 rounded-xl text-white text-sm font-body
-                           transition-all whitespace-nowrap ${FOCUS}`}>
-                {sortDias === 'asc'
-                  ? <><ChevronUp size={14} aria-hidden="true" />Más urgentes</>
-                  : <><ChevronDown size={14} aria-hidden="true" />Menos urgentes</>}
-              </button>
-            )}
-
-            {/* Solo aparece cuando hay filtros distintos al valor por defecto */}
-            {filtrosActivos > 0 && (
-              <button type="button" onClick={onClear}
-                className={`flex items-center justify-center gap-2 min-h-[44px] md:min-h-[38px] px-4 rounded-xl border border-surface-600
-                           text-surface-300 hover:text-white text-sm font-body transition-all whitespace-nowrap ${FOCUS}`}>
-                <X size={14} aria-hidden="true" />Limpiar
-              </button>
-            )}
-
-            {/* El contador se mantiene para lectores de pantalla; en desktop no se muestra */}
-            <p role="status" aria-live="polite" className="text-surface-400 text-xs font-body text-center sr-only">
-              {total} resultado{total !== 1 ? 's' : ''}
-            </p>
+          {/* «Ordenar por» se resuelve con un ícono dentro del selector; el rótulo queda para lectores de
+              pantalla y tooltip. */}
+          <div className="relative flex-shrink-0">
+            <label htmlFor="saldos-orden" className="sr-only">Ordenar por</label>
+            <ArrowUpDown size={16} aria-hidden="true"
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-300 pointer-events-none" />
+            <select id="saldos-orden" title="Ordenar por" value={valorOrden} onChange={(e) => onChange('orden', e.target.value)}
+              className={`appearance-none ${ALTO_CONTROL} w-[11.5rem] pl-9 pr-9 cursor-pointer
+                          bg-surface-700 border border-surface-600 rounded-xl text-white text-sm font-body
+                          [color-scheme:dark] focus:outline-none focus:border-brand-500 ${FOCUS}`}>
+              {opciones.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <ChevronDown size={16} aria-hidden="true"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-surface-300 pointer-events-none" />
           </div>
         </div>
       </div>
+
+      {errorRango && (
+        <p id={ID_ERROR_PAGO} role="alert" className="flex items-center gap-1.5 min-w-0 text-red-400 text-xs font-body">
+          <AlertCircle size={14} className="flex-shrink-0" aria-hidden="true" />
+          <span className="min-w-0 break-words">{errorRango}</span>
+        </p>
+      )}
+
+      {/* Contador solo para lectores de pantalla (el total visible está en el paginador) */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {total} resultado{total !== 1 ? 's' : ''}
+      </p>
     </Card>
   )
 }
@@ -971,6 +1082,10 @@ function SaldoCard({ saldo, onOpen }) {
           <dt className="text-surface-500">Vencimiento</dt>
           <dd className="text-surface-300 font-mono mt-0.5">{fmtFecha(saldo.fechaVto)}</dd>
         </div>
+        <div>
+          <dt className="text-surface-500">Fecha de pago</dt>
+          <dd className={`font-mono mt-0.5 ${v.tienePago ? 'text-surface-300' : 'text-surface-400'}`}>{v.fechaPago}</dd>
+        </div>
       </dl>
 
       {!v.estaSaldado && (
@@ -1008,6 +1123,8 @@ const COLUMNAS = [
   { key: 'dias',        label: 'Días',        cls: 'hidden lg:table-cell' },
   { key: 'monto',       label: 'Monto' },
   { key: 'estado',      label: 'Estado' },
+  // Ordenable por servidor (clic en el encabezado). En tablet se colapsa y viaja bajo «Estado».
+  { key: 'fechaPago',   label: 'Fecha de pago', cls: 'hidden lg:table-cell', orden: CAMPO_FECHA_PAGO },
   { key: 'accion',      label: '', sr: 'Acciones' },
 ]
 
@@ -1048,25 +1165,62 @@ function SaldoRow({ saldo, onOpen }) {
         <p className="text-white font-mono font-medium">{fmt(v.montoVisible)}</p>
         {v.esParcial && <p className="text-surface-500 text-xs font-mono">de {fmt(saldo.monto)}</p>}
       </td>
-      <td className="py-3 px-3"><EstadoBadge info={v.info} /></td>
+      <td className="py-3 px-3">
+        <EstadoBadge info={v.info} />
+        {/* En tablet la «Fecha de pago» viaja bajo el estado */}
+        <span className="block lg:hidden mt-1 text-surface-400 text-xs font-mono">Pago: {v.fechaPago}</span>
+      </td>
+      <td className={`hidden lg:table-cell py-3 px-3 font-mono text-xs ${v.tienePago ? 'text-surface-300' : 'text-surface-400'}`}>
+        {v.fechaPago}
+      </td>
       <td className="py-3 px-3 text-surface-500"><Wallet size={14} aria-hidden="true" /></td>
     </tr>
   )
 }
 
-function SaldosTable({ items, onOpen }) {
+/** Encabezado ordenable: botón real (teclado + lector de pantalla) con `aria-sort` en el <th>. */
+function EncabezadoOrdenable({ columna, orden, onOrden }) {
+  const { campo, dir } = parseOrden(orden)
+  const activa = campo === columna.orden
+  const Icono = !activa ? ChevronsUpDown : dir === 'asc' ? ChevronUp : ChevronDown
+  const siguiente = alternarOrdenFechaPago(orden)
+  return (
+    <button type="button" onClick={() => onOrden(siguiente)}
+      className="inline-flex items-center gap-1.5 min-h-[44px] uppercase tracking-widest rounded
+                 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
+      {columna.label}
+      <Icono size={13} aria-hidden="true" className={activa ? 'text-brand-400' : 'text-surface-500'} />
+      <span className="sr-only">
+        {activa ? `, ordenado ${dir === 'asc' ? 'ascendente' : 'descendente'}` : ', sin ordenar'}. Activar para ordenar
+        {' '}{activa && dir === 'asc' ? 'descendente' : 'ascendente'}
+      </span>
+    </button>
+  )
+}
+
+function SaldosTable({ items, onOpen, orden, onOrden, permiteOrdenPago }) {
+  const { campo, dir } = parseOrden(orden)
   return (
     <div className="hidden md:block overflow-x-auto">
       <table className="w-full text-sm font-body">
         <caption className="sr-only">Listado de saldos</caption>
         <thead>
           <tr className="border-b border-surface-700">
-            {COLUMNAS.map(c => (
-              <th key={c.key} scope="col"
-                className={`text-left text-surface-400 text-xs tracking-widest uppercase py-3 px-3 font-body ${c.cls ?? ''}`}>
-                {c.label}{c.sr && <span className="sr-only">{c.sr}</span>}
-              </th>
-            ))}
+            {COLUMNAS.map(c => {
+              const ordenable = Boolean(c.orden) && permiteOrdenPago
+              const activa = ordenable && campo === c.orden
+              return (
+                <th key={c.key} scope="col"
+                  aria-sort={ordenable ? (activa ? (dir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined}
+                  className={`text-left text-surface-400 text-xs tracking-widest uppercase px-3 font-body
+                              ${ordenable ? 'py-0' : 'py-3'} ${c.cls ?? ''}`}>
+                  {ordenable
+                    ? <EncabezadoOrdenable columna={c} orden={orden} onOrden={onOrden} />
+                    : c.label}
+                  {c.sr && <span className="sr-only">{c.sr}</span>}
+                </th>
+              )
+            })}
           </tr>
         </thead>
         <tbody>
@@ -1097,19 +1251,20 @@ export default function Saldos() {
     totalEnParcial: 0,
   })
 
+  // Al cambiar el estado, el orden se reajusta a las opciones que ese estado ofrece.
   const setFilter = useCallback(
-    (campo, valor) => setFilters(f => ({ ...f, [campo]: valor })),
+    (campo, valor) => setFilters(f => {
+      const siguiente = { ...f, [campo]: valor }
+      return { ...siguiente, orden: normalizarOrden(siguiente.orden, siguiente.estado) }
+    }),
     [],
   )
-  // «Limpiar» conserva el orden elegido: es una preferencia, no un filtro.
+  // «Limpiar» restablece búsqueda, estado y rango de fecha de pago, pero conserva el orden
+  // elegido si sigue siendo válido para el estado por defecto (es una preferencia de lectura).
   const clearFilters = useCallback(
-    () => setFilters(f => ({ ...FILTROS_INICIALES, sortDias: f.sortDias })),
+    () => setFilters(f => ({ ...FILTROS_INICIALES, orden: normalizarOrden(f.orden, FILTROS_INICIALES.estado) })),
     [],
   )
-
-  const cargarKpis = useCallback(() => {
-    obtenerKPIsSaldos().then(setKpis).catch(e => console.error('[Saldos] No se pudieron cargar los KPIs', e))
-  }, [])
 
   // Si venimos desde Historial con un saldo pre-seleccionado, abrirlo directo
   useEffect(() => {
@@ -1119,32 +1274,71 @@ export default function Saldos() {
     }
   }, [location.state])
 
-  // CORRECCIÓN #3: cargar KPIs independientemente de los filtros de la tabla
-  useEffect(() => { cargarKpis() }, [cargarKpis])
-
   // ── Filtros derivados ─────────────────────────────────────────────────
   const searchDebounced = useDebounce(filters.search)
   const filtrosActivos  = contarFiltrosActivos(filters)
+  // Red de seguridad: el orden efectivo SIEMPRE es válido para el estado (selector, tabla y consulta
+  // leen el mismo valor).
+  const ordenEfectivo = normalizarOrden(filters.orden, filters.estado)
+  const { campo: ordenCampo, dir: ordenDir } = parseOrden(ordenEfectivo)
+  // Rango de fecha de pago: lo escrito vs. lo consultado. Con «hasta» < «desde» se informa el
+  // error y NO se consulta (Escenario 6): `pagoAplicado` conserva el último rango válido.
+  const { aplicado: pagoAplicado, error: errorRango } =
+    useRangoFechaAplicado(filters.pagoDesde, filters.pagoHasta)
 
-  // ── Datos + paginación ────────────────────────────────────────────────
-  // Estado, búsqueda y orden los resuelve el service (serverFilters): cambiar
-  // cualquiera refetchea y resetea la página. Desktop y mobile paginan el
-  // mismo conjunto porque ambos layouts leen el mismo `paginated`.
-  // `reload()` nunca resetea la página (se usa tras marcar/imputar un pago).
+  // ── KPIs sobre el conjunto FILTRADO ───────────────────────────────────
+  // Usan exactamente los mismos filtros que el listado (estado, búsqueda con debounce y último rango
+  // de fecha de pago válido), así que cifras y tabla coinciden. `reqKpisRef` descarta respuestas de
+  // consultas anteriores (al tipear o cambiar filtros rápido no pisan a la más reciente); ante un
+  // error se conservan los últimos valores mostrados.
+  const reqKpisRef = useRef(0)
+  const cargarKpis = useCallback(() => {
+    const reqId = ++reqKpisRef.current
+    obtenerKPIsSaldos({
+      estado:         filters.estado !== 'all' ? filters.estado : null,
+      search:         searchDebounced,
+      fechaPagoDesde: pagoAplicado.desde || null,
+      fechaPagoHasta: pagoAplicado.hasta || null,
+    })
+      .then((valores) => { if (reqId === reqKpisRef.current) setKpis(valores) })
+      .catch((e) => { if (reqId === reqKpisRef.current) console.error('[Saldos] No se pudieron cargar los KPIs', e) })
+  }, [filters.estado, searchDebounced, pagoAplicado.desde, pagoAplicado.hasta])
+
+  useEffect(() => { cargarKpis() }, [cargarKpis])
+
+  // ── Datos + paginación (EN EL SERVIDOR) ───────────────────────────────
+  // Filtros, búsqueda, rango de fecha de pago, orden y la página pedida los resuelve la base
+  // (obtenerSaldosPagina → `.range()` + total exacto): no hay tope de filas y solo viaja la página
+  // visible. Cambiar un filtro refetchea y resetea la página; desktop y mobile leen el mismo
+  // `paginated`. `reload()` nunca resetea la página (se usa tras marcar/imputar un pago).
   const {
-    pageItems: paginated,
-    items:     saldos,
+    pageItems:  paginated,
+    items:      saldos,
+    totalCount,
     page, setPage, totalPages,
-    loading:   isLoading,
+    loading:    isLoading,
     error,
-    reload:    load,
+    reload:     load,
   } = usePaginatedList({
-    fetcher: (f) => obtenerSaldos({
-      estado: f.filterEst !== 'all' ? f.filterEst : null,
-      orden:  f.sortDias,
-      search: f.search,
+    mode: 'server',
+    fetcher: (f) => obtenerSaldosPagina({
+      estado:         f.filterEst !== 'all' ? f.filterEst : null,
+      ordenPor:       f.ordenCampo === CAMPO_FECHA_PAGO ? CAMPO_FECHA_PAGO : 'vencimiento',
+      orden:          f.ordenDir,
+      search:         f.search,
+      fechaPagoDesde: f.pagoDesde || null,
+      fechaPagoHasta: f.pagoHasta || null,
+      page:           f.page,
+      pageSize:       f.pageSize,
     }),
-    serverFilters: { filterEst: filters.estado, search: searchDebounced, sortDias: filters.sortDias },
+    serverFilters: {
+      filterEst: filters.estado,
+      search:    searchDebounced,
+      ordenCampo,
+      ordenDir,
+      pagoDesde: pagoAplicado.desde,
+      pagoHasta: pagoAplicado.hasta,
+    },
     pageSize: PAGE_SIZE,
   })
   const hasError = Boolean(error)
@@ -1194,7 +1388,7 @@ export default function Saldos() {
         </Button>
       </div>
 
-      {/* KPIs globales */}
+      {/* KPIs del conjunto filtrado (mismos filtros que el listado; sin filtros = total global) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <KpiCard label="Pendiente de cobro" value={fmtCompactoARS(kpis.totalPendiente)}
           valueClass="text-yellow-400"
@@ -1217,11 +1411,12 @@ export default function Saldos() {
       </div>
 
       <SaldosFilters
-        filters={filters}
+        filters={{ ...filters, orden: ordenEfectivo }}
         onChange={setFilter}
         onClear={clearFilters}
         filtrosActivos={filtrosActivos}
-        total={saldos.length}
+        total={totalCount}
+        errorRango={errorRango}
       />
 
       {/* Listado: tarjetas en mobile, tabla desde tablet */}
@@ -1236,13 +1431,14 @@ export default function Saldos() {
           ) : (
             <>
               <SaldosCardList items={paginated} onOpen={setSelected} />
-              <SaldosTable items={paginated} onOpen={setSelected} />
+              <SaldosTable items={paginated} onOpen={setSelected} orden={ordenEfectivo} onOrden={(o) => setFilter('orden', o)}
+                permiteOrdenPago={permiteOrdenFechaPago(filters.estado)} />
             </>
           )}
 
           {!hasError && (
             <PaginadorListado
-              page={page} totalPages={totalPages} pageSize={PAGE_SIZE} total={saldos.length}
+              page={page} totalPages={totalPages} pageSize={PAGE_SIZE} total={totalCount}
               onChange={(n) => { setPage(n); scrollToStart() }}
             />
           )}
