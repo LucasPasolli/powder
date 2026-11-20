@@ -5,17 +5,18 @@ import { Button, Input, Select, Modal, Table, Tr, Td, Badge, Card } from '../../
 import DateField from '../../../components/ui/DateField'
 import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Pencil, Trash2 } from 'lucide-react'
+import { EstadoLogisticoBadge } from '../../../components/pedidos/pedidosPresentacion'
 import { obtenerPedidos, actualizarEstadosPedido, eliminarPedido } from '../../../services/pedidosService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, normalizarTexto, Pagination, ConfirmModal } from './comunes'
 import { FiltrosGestionMovil, opcionesTodas } from './comunes'
 import { useBreakpoint } from '../../../hooks/useBreakpoint'
+import { useAvisoNotas } from '../../../hooks/useAvisoNotas'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PEDIDOS DE COMPRA
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const EPAGO_COLOR = { pendiente: 'yellow', pagado: 'green' }
-const ELOGISTICO_COLOR = { original: 'orange', facturado: 'blue', recibido: 'green' }
 
 // Etiquetas de método de pago de PEDIDOS DE COMPRA (columna `metodo_pago`).
 // Cuenta Corriente se distingue según tenga plan de cuotas o sea pago único
@@ -39,6 +40,8 @@ export default function Pedidos() {
   const [confirm, setConfirm] = useState(null)
   const [search, setSearch] = useState('')
   const { isCompact } = useBreakpoint()
+  // Escenario 11: avisa si el pedido tiene notas que se eliminarán con él.
+  const { aviso: avisoNotas } = useAvisoNotas('pedido_compra', confirm)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(1)
@@ -138,7 +141,7 @@ export default function Pedidos() {
               <Td>{fmt(r.monto)}</Td>
               <Td className="text-surface-400">{pedidoMetodoLabel(r)}</Td>
               <Td><Badge color={EPAGO_COLOR[r.estadoPago] ?? 'gray'}>{r.estadoPago.charAt(0).toUpperCase() + r.estadoPago.slice(1)}</Badge></Td>
-              <Td><Badge color={ELOGISTICO_COLOR[r.estadoLogistico] ?? 'gray'}>{r.estadoLogistico.charAt(0).toUpperCase() + r.estadoLogistico.slice(1)}</Badge></Td>
+              <Td><EstadoLogisticoBadge pedido={r} /></Td>
               <Td>
                 <div className="flex gap-2 justify-end">
                   <Button variant="ghost" size="sm" icon={Pencil} onClick={() => openEdit(r)} />
@@ -203,6 +206,7 @@ export default function Pedidos() {
           ['Monto', fmt(confirmRow.monto)],
         ] : []}
         message="¿Eliminar este pedido y todos sus detalles?"
+        avisos={[avisoNotas]}
       />
     </div>
   )

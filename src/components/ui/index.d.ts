@@ -15,7 +15,7 @@ import type {
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 export type ButtonSize    = 'sm' | 'md' | 'lg'
 export type BadgeColor    =
-  | 'orange' | 'green' | 'blue' | 'red' | 'yellow' | 'gray' | 'violet'
+  | 'orange' | 'green' | 'blue' | 'red' | 'yellow' | 'gray' | 'violet' | 'white'
 
 export interface ButtonProps
   extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'> {

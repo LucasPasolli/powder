@@ -116,6 +116,9 @@ export function Pagination({ page, total, pageSize, onChange, onNavigate }) {
 export function ConfirmModal({
   open, onClose, onConfirm, details, message,
   loading = false, confirmLabel = 'Eliminar', error = '', warning = '',
+  // Avisos informativos adicionales (p. ej. "el registro tiene notas asociadas").
+  // Se muestran con el mismo estilo que `warning`; no exigen confirmación extra.
+  avisos = [],
   // Personalización (por defecto: diálogo de eliminación, sin cambios para los usos existentes).
   // confirmVariant = null usa la variante por defecto de Button.
   title = 'Confirmar eliminación', loadingLabel = 'Eliminando…',
@@ -155,6 +158,12 @@ export function ConfirmModal({
             <p className="text-yellow-200 text-xs font-body leading-relaxed">{warning}</p>
           </div>
         )}
+        {avisos.filter(Boolean).map((aviso) => (
+          <div key={aviso} role="alert" className="w-full flex items-start gap-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 text-left">
+            <AlertTriangle size={14} className="text-yellow-400 mt-0.5 shrink-0" aria-hidden="true" />
+            <p className="text-yellow-200 text-xs font-body leading-relaxed">{aviso}</p>
+          </div>
+        ))}
         {requireAck && (
           <label className="w-full flex items-start gap-2 text-left cursor-pointer select-none">
             <input

@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import Presupuestador from './Presupuestador'
 import { generarPDFPresupuesto } from '../lib/pdfPresupuesto'
 import { Card, PageHeader, Button, Badge, Modal } from '../components/ui'
+import NotasRegistro from '../components/notas/NotasRegistro'
 import DateField from '../components/ui/DateField'
 import FiltrosMovil, { BuscadorListado, mensajeRangoInvalido } from '../components/ui/FiltrosMovil'
 import PaginadorListado from '../components/ui/PaginadorListado'
@@ -757,7 +758,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
                                 </span>
                               )}
                             </div>
-                            <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" />
+                            <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" conIcono={false} />
                           </td>
                           <td className="py-3 px-4">{d.medida ? <Badge color="blue">{d.medida}</Badge> : <span className="text-surface-500 text-xs">—</span>}</td>
                           <td className="py-3 px-4 text-surface-200 font-mono text-center">{d.cantidad}</td>
@@ -792,7 +793,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
                         <div className="min-w-0">
                           <p className="text-surface-500 text-[11px] font-mono mb-0.5">#{i + 1} · Prod. #{d.idProducto}</p>
                           <p className="text-white text-sm font-body break-words">{d.nombreProducto ?? `#${d.idProducto}`}</p>
-                          <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" />
+                          <EtiquetaStock estado={estadoStockPorDetalle.get(d.idDetalle)} className="mt-1" conIcono={false} />
                           {d.productoEliminado && (
                             <span className="inline-block mt-1" title="Este producto ya no está disponible en el catálogo actual. Se muestran su nombre y precio tal como estaban al momento de la venta.">
                               <Badge color="gray">
@@ -969,6 +970,10 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
         </Card>
       )}
 
+      {/* Notas al pie del detalle (Escenario 1): debajo de todo el contenido actual.
+          Independiente del estado del registro (Escenario 7) y excluida de PDF/impresión (Escenario 8). */}
+      <NotasRegistro tipo="presupuesto" idRegistro={pres.idPresupuesto} />
+
       {/* Modales estado */}
       {[
         { key:'aprobar',  title:'Aprobar presupuesto',  body:`Presupuesto #${pres.idPresupuesto} → Aprobado. Se descuenta stock y se genera saldo pendiente de cobro.`, action:()=>cambiarEstado('aprobado'),   label:'Aprobar',        icon:ThumbsUp },
@@ -986,7 +991,7 @@ function PresupuestoDetalle({ presupuesto: presInit, onBack, onUpdated, onEditar
 
           {/* [STOCK INFORMATIVO] Escenario 6: resumen al confirmar. Informativo: el botón no se deshabilita. */}
           {(m.key === 'aprobar' || m.key === 'pagar') && resumenStock.total > 0 && (
-            <ResumenAdvertenciasStock resumen={resumenStock} className="mb-4" />
+            <ResumenAdvertenciasStock resumen={resumenStock} variante="modal" className="mb-4" />
           )}
 
           {/* CORRECCIÓN (desacople Día X / Día Y): captura explícita de la

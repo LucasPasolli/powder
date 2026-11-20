@@ -12,6 +12,7 @@ import { obtenerSplitsPorPresupuestos } from '../../../services/pagoSplitService
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, Pagination, ConfirmModal, InfoBanner, dropdownClass } from './comunes'
 import { FiltrosGestionMovil, opcionesTodas } from './comunes'
 import { useBreakpoint } from '../../../hooks/useBreakpoint'
+import { useAvisoNotas } from '../../../hooks/useAvisoNotas'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PRESUPUESTOS
@@ -39,6 +40,8 @@ export default function Presupuestos() {
   const [resumenEliminacion, setResumenEliminacion] = useState(null)
   const [search, setSearch] = useState('')
   const { isCompact } = useBreakpoint()
+  // Escenario 11: avisa si el presupuesto (o su saldo) tiene notas que se eliminarán con él.
+  const { aviso: avisoNotas } = useAvisoNotas('presupuesto', confirm)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filtroEstado, setFiltroEstado] = useState('')
@@ -344,6 +347,7 @@ export default function Presupuestos() {
           ] : []),
         ] : []}
         message="¿Eliminar este presupuesto y todos sus detalles?"
+        avisos={[avisoNotas]}
         // ⚠️ Esta acción borra el presupuesto ENTERO (detalle, saldo y cobros
         // de CC incluidos) — no confundir con "Eliminar saldo" de la pestaña
         // Saldos, que solo revierte el cobro y deja el presupuesto intacto.

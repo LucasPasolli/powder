@@ -9,6 +9,7 @@ import { obtenerSaldos, actualizarSaldo, eliminarSaldo } from '../../../services
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, normalizarTexto, Pagination, ConfirmModal, InfoBanner, dropdownClass } from './comunes'
 import { FiltrosGestionMovil, opcionesTodas } from './comunes'
 import { useBreakpoint } from '../../../hooks/useBreakpoint'
+import { useAvisoNotas } from '../../../hooks/useAvisoNotas'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SALDOS
@@ -21,6 +22,8 @@ export default function Saldos() {
   const [confirm, setConfirm] = useState(null)
   const [search, setSearch] = useState('')
   const { isCompact } = useBreakpoint()
+  // Escenario 11: avisa si el saldo tiene notas que se eliminarán con él.
+  const { aviso: avisoNotas } = useAvisoNotas('saldo', confirm)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filtroEstado, setFiltroEstado] = useState('')
@@ -303,6 +306,7 @@ export default function Saldos() {
           ['Estado', confirmRow.estado],
         ] : []}
         message="¿Eliminar este saldo?"
+        avisos={[avisoNotas]}
         warning={advertenciaEliminacion(confirmRow)}
         requireAck={requiereAck(confirmRow)}
         ackLabel="Entiendo que se revertirá el estado de pago y se eliminarán los cobros asociados"
