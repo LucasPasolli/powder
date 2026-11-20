@@ -19,6 +19,7 @@ import {
 import { supabase } from '../lib/supabase'
 import { MEDIDAS_VALIDAS } from '../lib/medidasProducto'
 import { Button, Card, PageHeader, Modal, Input, Select, Badge } from '../components/ui'
+import MenuAcciones from '../components/ui/MenuAcciones'
 import FiltrosInventario from '../components/inventario/FiltrosInventario'
 import { useVistaInventario, useGuardarVista } from '../hooks/useVistaInventario'
 import { prepararCatalogo } from '../lib/busquedaProductos'
@@ -963,20 +964,48 @@ function ProductoCard({ producto: p, onStock, onEditar, onEliminar }) {
 }
 
 /**
- * Barra de acciones globales de la pantalla. Se renderiza dos veces con la
- * misma API: dentro de <PageHeader> en desktop (≥ lg, como siempre) y en una
- * barra propia debajo del título en mobile/tablet. <PageHeader> no permite
- * que sus acciones envuelvan en anchos intermedios (flex-shrink-0), y con 5
- * botones eso desbordaba la pantalla en tablet.
+ * Barra de acciones globales de la pantalla, con jerarquía de 3 niveles:
+ *   1. primaria   → "Nuevo Producto" (CTA sólido).
+ *   2. secundaria → "Exportar Lista".
+ *   3. terciaria  → "Más acciones": menú con las acciones de uso ocasional
+ *                   (nueva categoría, actualizar precios de venta, precio por proveedor).
+ *
+ * Se renderiza dos veces con la misma API: dentro de <PageHeader> en desktop
+ * (> 1024 px) y en una barra propia debajo del título en mobile/tablet.
+ * <PageHeader> no permite que sus acciones envuelvan en anchos intermedios
+ * (flex-shrink-0). Los umbrales usan `min-[1025px]` para coincidir con
+ * useBreakpoint (el 1024 exacto cuenta como tablet).
+ *
+ * Mobile: "Nuevo Producto" a ancho completo y debajo [Más acciones | Exportar].
  */
 function AccionesCabecera({ compacta = false, exportando, sinProductos, onNuevo, onCategoria, onPrecios, onPrecioProveedor, onExportar }) {
-  const tactil = 'justify-center text-center min-h-[44px] lg:min-h-0'
+  const tactil = 'justify-center text-center min-h-[44px] min-[1025px]:min-h-0'
+  const gruposMenu = [
+    {
+      id: 'catalogo',
+      titulo: 'Catálogo',
+      items: [
+        { id: 'categoria', label: 'Nueva categoría', descripcion: 'Agrupá tus productos por rubro',
+          icon: Plus, onSelect: onCategoria },
+      ],
+    },
+    {
+      id: 'precios',
+      titulo: 'Precios',
+      items: [
+        { id: 'precios-venta', label: 'Actualizar precios de venta', descripcion: 'Aplica un margen sobre el costo a todos los productos',
+          icon: TrendingUp, onSelect: onPrecios },
+        { id: 'precio-proveedor', label: 'Precio por proveedor', descripcion: 'Cambia el costo de los productos de un proveedor',
+          icon: Truck, onSelect: onPrecioProveedor },
+      ],
+    },
+  ]
   return (
     <div role="group" aria-label="Acciones de inventario"
-      className={compacta ? 'grid grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:hidden' : 'hidden lg:flex lg:flex-wrap gap-2'}>
-      <Button variant="secondary" className={tactil} onClick={onCategoria}>+ Categoría</Button>
-      <Button variant="secondary" className={tactil} onClick={onPrecios}>Actualizar Precios de Venta</Button>
-      <Button variant="secondary" icon={Truck} className={tactil} onClick={onPrecioProveedor}>Precio por Proveedor</Button>
+      className={compacta
+        ? 'grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end min-[1025px]:hidden'
+        : 'hidden min-[1025px]:flex min-[1025px]:flex-wrap min-[1025px]:items-center gap-2'}>
+      <MenuAcciones etiqueta="Más acciones" ariaLabel="Más acciones de inventario" grupos={gruposMenu} />
       <Button
         variant="secondary"
         icon={FileSpreadsheet}
@@ -988,7 +1017,7 @@ function AccionesCabecera({ compacta = false, exportando, sinProductos, onNuevo,
         {exportando ? 'Exportando...' : 'Exportar Lista'}
       </Button>
       <Button icon={PackagePlus} onClick={onNuevo}
-        className={`${tactil} ${compacta ? 'order-first col-span-2 sm:col-span-1' : ''}`}>
+        className={`${tactil} ${compacta ? 'order-first col-span-2 sm:order-none sm:col-span-1' : ''}`}>
         Nuevo Producto
       </Button>
     </div>
