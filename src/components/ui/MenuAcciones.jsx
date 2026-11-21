@@ -3,25 +3,35 @@
 // ocasional y descargar el ruido visual de las barras de acciones.
 //
 // COMPORTAMIENTO POR BREAKPOINT (fuente única: useBreakpoint)
-//   · desktop (> 1024 px)   : popover anclado debajo del botón.
-//   · tablet / mobile       : bottom sheet con scrim (objetivos táctiles de 48 px,
-//                             safe-area inferior, scroll interno con dvh).
+//   · desktop (> 1024 px)   : popover anclado debajo del botón, alineado a su borde
+//                             derecho; si no entra se abre hacia arriba o scrollea por
+//                             dentro (ver lib/posicionMenu.js).
+//   · tablet / mobile       : bottom sheet con scrim y margen lateral (objetivos táctiles
+//                             de 48 px, safe-area, scroll interno con dvh).
 //
-// DECISIÓN: el sheet se renderiza en un portal (document.body). El header de la
-// página usa `animate-slide-up` (transform), y un `position: fixed` dentro de un
-// ancestro con transform se posiciona respecto de ese ancestro, no del viewport.
+// DECISIÓN CLAVE — AMBOS formatos se renderizan en un portal (document.body)
+//   El header de la página usa `animate-slide-up` (transform + fill-mode forwards): crea
+//   un stacking context PERMANENTE. Un popover `absolute z-50` dentro de él queda
+//   atrapado y los filtros/banner/tarjetas posteriores se pintan encima (el bug original).
+//   Un `fixed` dentro de un ancestro con transform tampoco se ancla al viewport. En un
+//   portal el menú compite en el contexto raíz, con z-index por encima de la página.
 //
 // ACCESIBILIDAD (WCAG 2.1 AA)
 //   · Botón: aria-haspopup="menu", aria-expanded, aria-controls.
 //   · Teclado: Enter/Espacio/↓ abren (↑ abre en el último), ↑↓ Home End navegan con
 //     wrap, Esc cierra y devuelve el foco al botón, Tab cierra.
+//   · Clic fuera cierra y devuelve el foco al botón SALVO que el clic haya enfocado otro
+//     control (no se le roba el foco al campo que el usuario eligió).
 //   · Al elegir un ítem el foco vuelve al botón ANTES de ejecutar la acción, así el
 //     modal que abra la acción lo restaura al cerrarse.
+//   · Descripciones y títulos en surface-200: 6.9:1 sobre surface-800 y 6.2:1 sobre surface-700 (hover).
+//     surface-300 (3.7:1) y surface-400 (2.2:1) NO cumplen 4.5:1 sobre estas superficies.
 //   · Animaciones desactivadas con prefers-reduced-motion (ver index.css).
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, X } from 'lucide-react'
 import { useBreakpoint } from '../../hooks/useBreakpoint'
+import { usePosicionMenu } from '../../hooks/usePosicionMenu'
 import { indiceSiguiente, TECLAS_NAVEGACION } from '../../lib/menuNavegacion'
 
 /**
@@ -69,6 +79,9 @@ export default function MenuAcciones({ etiqueta, ariaLabel, grupos, className = 
     setAbierto(true)
   }
 
+  // Desktop: el panel (portal) se ancla al botón con `position: fixed`.
+  usePosicionMenu({ activo: abierto && !isCompact, anclaRef: botonRef, panelRef })
+
   // Foco inicial al abrir.
   useEffect(() => {
     if (!abierto) return
@@ -80,13 +93,34 @@ export default function MenuAcciones({ etiqueta, ariaLabel, grupos, className = 
   // Rotar o redimensionar cruzando un breakpoint cambia el formato: se cierra.
   useEffect(() => { setAbierto(false) }, [isCompact])
 
+  // Esc cierra desde cualquier foco (también si el usuario hizo clic en una zona no
+  // enfocable del panel, caso en que el evento no pasaría por el panel).
+  useEffect(() => {
+    if (!abierto) return undefined
+    const alTeclear = (e) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      cerrar()
+    }
+    document.addEventListener('keydown', alTeclear, true)
+    return () => document.removeEventListener('keydown', alTeclear, true)
+  }, [abierto, cerrar])
+
   // Desktop: clic/toque fuera cierra. En compact lo resuelve el scrim (evita el
   // "clic fantasma" que cae sobre el elemento de abajo al desmontarse el scrim).
+  // El panel vive en un portal: ya no es descendiente del wrapper, hay que excluirlo aparte.
   useEffect(() => {
     if (!abierto || isCompact) return undefined
     const fuera = (e) => {
-      if (wrapperRef.current?.contains(e.target)) return
+      if (wrapperRef.current?.contains(e.target) || panelRef.current?.contains(e.target)) return
       cerrar({ devolverFoco: false })
+      // El foco vuelve al botón, salvo que el clic haya enfocado otro control (el foco
+      // se asigna en `mousedown`, posterior a `pointerdown`; por eso se espera un frame).
+      requestAnimationFrame(() => {
+        const activo = document.activeElement
+        if (!activo || activo === document.body) botonRef.current?.focus()
+      })
     }
     document.addEventListener('pointerdown', fuera)
     return () => document.removeEventListener('pointerdown', fuera)
@@ -107,12 +141,6 @@ export default function MenuAcciones({ etiqueta, ariaLabel, grupos, className = 
   }
 
   const onKeyDownPanel = (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      cerrar()
-      return
-    }
     if (e.key === 'Tab') {
       if (isCompact) { e.preventDefault(); cerrar() } else cerrar({ devolverFoco: false })
       return
@@ -137,7 +165,7 @@ export default function MenuAcciones({ etiqueta, ariaLabel, grupos, className = 
         return (
           <div key={grupo.id} role="group" aria-labelledby={tituloId}
             className={g > 0 ? 'border-t border-surface-700 pt-1' : ''}>
-            <p id={tituloId} className="px-3 pt-2 pb-1 text-xs font-mono uppercase tracking-widest text-surface-400">
+            <p id={tituloId} className="px-3 pt-2 pb-1 text-xs font-mono uppercase tracking-widest text-surface-200">
               {grupo.titulo}
             </p>
             {grupo.items.map((item) => {
@@ -155,7 +183,7 @@ export default function MenuAcciones({ etiqueta, ariaLabel, grupos, className = 
                   <span className="min-w-0">
                     <span className="block text-sm font-body font-medium">{item.label}</span>
                     {item.descripcion && (
-                      <span className="block text-xs font-body text-surface-400 mt-0.5">{item.descripcion}</span>
+                      <span className="block text-xs font-body text-surface-200 mt-0.5 break-words">{item.descripcion}</span>
                     )}
                   </span>
                 </button>
@@ -172,7 +200,7 @@ export default function MenuAcciones({ etiqueta, ariaLabel, grupos, className = 
       <button ref={botonRef} id={botonId} type="button"
         aria-haspopup="menu" aria-expanded={abierto} aria-controls={abierto ? menuId : undefined}
         aria-label={ariaLabel}
-        onClick={() => (abierto ? cerrar({ devolverFoco: false }) : abrir('primero'))}
+        onClick={() => (abierto ? cerrar() : abrir('primero'))}
         onKeyDown={onKeyDownBoton}
         className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border border-transparent
           px-4 py-2.5 text-sm min-[1025px]:text-xs font-body font-medium
@@ -185,22 +213,29 @@ export default function MenuAcciones({ etiqueta, ariaLabel, grupos, className = 
           className={`transition-transform duration-200 motion-reduce:transition-none ${abierto ? 'rotate-180' : ''}`} />
       </button>
 
-      {abierto && !isCompact && (
+      {/* Desktop: popover en portal. `top/left/maxHeight` los escribe usePosicionMenu antes del
+          primer pintado. Fondo sólido (bg-surface-800, sin alfa) y z-index sobre toda la página. */}
+      {abierto && !isCompact && createPortal(
         <div ref={panelRef} onKeyDown={onKeyDownPanel}
-          className="absolute left-0 top-full z-50 mt-2 w-[22rem] max-w-[calc(100vw-2rem)] origin-top-left
-                     rounded-xl border border-surface-600 bg-surface-800 p-1.5 shadow-2xl animate-menu-in">
+          className="fixed left-0 top-0 z-[9998] w-[22rem] max-w-[calc(100vw-1rem)] isolate
+                     overflow-y-auto overscroll-contain rounded-xl border border-surface-600
+                     bg-surface-800 p-1.5 shadow-2xl animate-menu-in">
           {cuerpo}
-        </div>
+        </div>,
+        document.body,
       )}
 
+      {/* Mobile/tablet: bottom sheet con margen lateral y safe-areas. */}
       {abierto && isCompact && createPortal(
         <>
           <div aria-hidden="true" onClick={() => cerrar()}
             className="fixed inset-0 z-[9997] bg-black/60 animate-scrim-in" />
           <div ref={panelRef} onKeyDown={onKeyDownPanel}
-            className="fixed inset-x-0 bottom-0 z-[9998] max-h-[85dvh] overflow-y-auto overscroll-contain
-                       rounded-t-2xl border-t border-surface-600 bg-surface-800 px-2 pt-1
-                       pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-2xl animate-sheet-in">
+            className="fixed z-[9998] mx-auto max-w-xl max-h-[85dvh] overflow-y-auto overscroll-contain
+                       left-[max(0.5rem,env(safe-area-inset-left))] right-[max(0.5rem,env(safe-area-inset-right))]
+                       bottom-[max(0.5rem,env(safe-area-inset-bottom))]
+                       rounded-2xl border border-surface-600 bg-surface-800 px-2 pt-1 pb-2
+                       shadow-2xl animate-sheet-in">
             <div className="flex items-center justify-between pl-3">
               <span className="font-display text-lg tracking-widest text-white uppercase">{etiqueta}</span>
               <button type="button" onClick={() => cerrar()} aria-label="Cerrar menú"
