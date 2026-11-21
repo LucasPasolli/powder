@@ -11,7 +11,9 @@
 //   · Capa pura con storage inyectable: se testea sin navegador. Toda falla de storage (modo privado,
 //     cuota llena, storage bloqueado) se absorbe: persistir es una mejora, jamás puede romper la pantalla.
 
-import { FILTROS_INICIALES, TODOS, VALORES_STOCK, MAX_CARACTERES_NOMBRE } from './inventarioFiltros'
+import {
+  FILTROS_INICIALES, TODOS, VALORES_STOCK, VALORES_PROMOCION, MAX_CARACTERES_NOMBRE,
+} from './inventarioFiltros'
 import { sanitizarDigitosId } from './busquedaProductos'
 import { parseOrden } from './inventarioUtils'
 import { logger } from './logger'
@@ -47,6 +49,8 @@ export function sanearVista(crudo) {
       filterCat: esIdONada(f.filterCat) ? f.filterCat : TODOS,
       filterProveedor: esIdONada(f.filterProveedor) ? f.filterProveedor : TODOS,
       filterStock: VALORES_STOCK.includes(f.filterStock) ? f.filterStock : TODOS,
+      // Vistas guardadas antes de existir este filtro no lo traen: caen a «Todos» (compatible hacia atrás).
+      filterPromocion: VALORES_PROMOCION.includes(f.filterPromocion) ? f.filterPromocion : TODOS,
       filterBajoStock: f.filterBajoStock === true,
     },
     sortKey,

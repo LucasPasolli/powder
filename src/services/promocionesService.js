@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 import { logger } from '../lib/logger'
 import { CODIGOS, ErrorOperacion, mapearErrorSeguro } from './idempotencia'
 import { normalizarIds } from '../lib/promocionesConfig'
+import { hoyISO } from '../lib/fechas'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,10 +119,18 @@ export async function obtenerPromociones({
  * Devuelve las promociones vigentes a la fecha indicada.
  * "Vigente" = activo = true AND fechaInicio <= fecha AND fechaFin >= fecha.
  * Equivale a la query principal de src/lib/promociones.js (calcularPromocion).
- * Usado en: Presupuestador.jsx al agregar un ítem al carrito.
+ * Usado en: Presupuestador.jsx (al agregar un ítem al carrito), Inventario.jsx (etiqueta y filtro
+ * de promoción) y la exportación de la lista de precios.
+ *
+ * «Hoy» es la fecha de NEGOCIO (America/Argentina/Buenos_Aires, lib/fechas), no la de UTC:
+ * `toISOString()` pasa al día siguiente a las 21:00 locales y haría que, de noche, un módulo viera
+ * vencida (o aún no vigente) una promoción que otro módulo ve vigente.
+ *
+ * Se devuelven ordenadas por id: así, si dos promociones del mismo alcance aplican a un producto,
+ * `calcularPromocionParaItem` (que toma la primera) elige SIEMPRE la misma en todas las pantallas.
  */
 export async function obtenerPromocionesVigentes(fecha = null) {
-  const hoy = fecha ?? new Date().toISOString().split('T')[0]
+  const hoy = fecha ?? hoyISO()
 
   const { data, error } = await supabase
     .from('promocion')
@@ -131,7 +140,7 @@ export async function obtenerPromocionesVigentes(fecha = null) {
     .gte('fecha_fin', hoy)
 
   if (error) manejarError('obtenerPromocionesVigentes', error)
-  return data.map(mapPromocion)
+  return data.map(mapPromocion).sort((a, b) => a.idPromocion - b.idPromocion)
 }
 
 /**

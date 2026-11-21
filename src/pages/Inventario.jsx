@@ -14,8 +14,12 @@ import {
 import { obtenerProveedores, contarProductosDeProveedor, actualizarPrecioPorProveedor } from '../services/proveedoresService'
 import { obtenerPromocionesVigentes } from '../services/promocionesService'
 import {
-  construirFilasListaPrecios, generarListaPreciosXlsx, descargarArchivo, fechaLocalISO,
+  construirFilasListaPrecios, generarListaPreciosXlsx, descargarArchivo,
 } from '../lib/listaPreciosExport'
+import { conPromocion } from '../lib/promocionProducto'
+import { hoyISO } from '../lib/fechas'
+import { EtiquetaPromocion, PrecioProducto } from '../components/inventario/PromocionProducto'
+import { useRevalidarPorCambioDeDia } from '../hooks/useRevalidarPorCambioDeDia'
 import { supabase } from '../lib/supabase'
 import { MEDIDAS_VALIDAS } from '../lib/medidasProducto'
 import { Button, Card, PageHeader, Modal, Input, Select, Badge } from '../components/ui'
@@ -937,6 +941,7 @@ function ProductoCard({ producto: p, onStock, onEditar, onEliminar }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
+        {p.promocion && <EtiquetaPromocion promocion={p.promocion} />}
         <Badge color="gray">{p.categoriaNombre}</Badge>
         {p.tieneMedidas ? <Badge color="blue">Con medidas</Badge> : <Badge color="gray">General</Badge>}
       </div>
@@ -947,7 +952,7 @@ function ProductoCard({ producto: p, onStock, onEditar, onEliminar }) {
         <div>
           <dt className="text-surface-500 text-xs">Precio de venta</dt>
           <dd className="font-mono text-white mt-0.5">
-            {p.precioUnitario > 0 ? fmt(p.precioUnitario) : <span className="text-surface-500">—</span>}
+            <PrecioProducto precioUnitario={p.precioUnitario} promocion={p.promocion} formatear={fmt} />
           </dd>
         </div>
         <div>
@@ -1048,6 +1053,10 @@ export default function Inventario() {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [toast,         setToast]         = useState(null)
   const [exportando,    setExportando]    = useState(false)
+  // Las promociones se cargan junto al catálogo. Si fallan, el inventario sigue funcionando sin ellas
+  // (precios de lista, filtro «Promoción» deshabilitado) y se avisa; no se oculta como si no hubiera ninguna.
+  const [promocionesDisponibles, setPromocionesDisponibles] = useState(true)
+  const [fechaPromociones,       setFechaPromociones]       = useState(null)
   // Mobile/tablet: filtros y orden viven en el panel del patrón único (<FiltrosMovil>).
   const { isCompact } = useBreakpoint()
 
@@ -1073,16 +1082,26 @@ export default function Inventario() {
     fetcher: async () => {
       // incluirInactivos: false → los productos dados de baja lógica nunca
       // vuelven a listarse en el catálogo, sin necesidad de filtro visual.
-      const [cats, prods, provs] = await Promise.all([
+      // Fecha de NEGOCIO (Buenos Aires): la misma que usan el Presupuestador y la exportación.
+      const hoy = hoyISO()
+      const [cats, prods, provs, promos] = await Promise.all([
         obtenerCategorias(),
         obtenerProductos({ incluirInactivos: false }),
         obtenerProveedores(),
+        // Una falla de promociones no debe tumbar todo el inventario (ya queda en el log del servicio):
+        // devuelve null y la pantalla se degrada con aviso.
+        obtenerPromocionesVigentes(hoy).catch(() => null),
       ])
       setCategorias(cats)
       setProveedores(provs)
+      setPromocionesDisponibles(promos !== null)
+      setFechaPromociones(hoy)
+      const catalogo = prods.map((p) => ({ ...p, categoriaNombre: p.categoria, stockTotal: p.cantidad }))
+      // La promoción se resuelve UNA vez por carga y viaja con cada producto (`p.promocion`): así el
+      // filtro, la etiqueta, el precio y los contadores salen del mismo dato y no pueden desincronizarse.
       // `prepararCatalogo` agrega `nombreNormalizado` (sin tildes/mayúsculas) UNA vez por carga,
       // no una vez por producto y por tecla.
-      return prepararCatalogo(prods.map((p) => ({ ...p, categoriaNombre: p.categoria, stockTotal: p.cantidad })))
+      return prepararCatalogo(promos ? conPromocion(catalogo, promos) : catalogo)
     },
     // El objeto de filtros se compara por contenido: cambiar cualquiera resetea la página a 1.
     clientFilters: { ...filtros, sortKey, sortDir },
@@ -1100,6 +1119,9 @@ export default function Inventario() {
     initialPage: paginaInicial,
   })
   const { anchorRef: tableAnchorRef, scrollToStart } = useScrollAnchor()
+
+  // La vigencia depende de la fecha: si el día cambia con la pantalla abierta se recarga (sin perder la página).
+  useRevalidarPorCambioDeDia(fechaPromociones, reload)
 
   const loadSinResetPage = reload
 
@@ -1172,7 +1194,7 @@ export default function Inventario() {
 
     setExportando(true)
     try {
-      const fecha = fechaLocalISO() // fecha local (no UTC) de exportación
+      const fecha = hoyISO() // fecha de negocio (Buenos Aires): no UTC ni la del dispositivo
       const promosVigentes = await obtenerPromocionesVigentes(fecha)
       const filas = construirFilasListaPrecios(productos, promosVigentes)
       const buffer = await generarListaPreciosXlsx(filas)
@@ -1253,9 +1275,25 @@ export default function Inventario() {
         )
       })()}
 
+      {!promocionesDisponibles && allProductos.length > 0 && (
+        <div role="alert" className="flex flex-col gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4
+                                     sm:flex-row sm:items-center sm:justify-between">
+          <p className="flex min-w-0 items-start gap-2 text-sm font-body text-yellow-200">
+            <AlertTriangle size={16} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
+            <span className="break-words">
+              No se pudieron cargar las promociones. Se muestran los precios de lista y el filtro «Promoción» no está disponible.
+            </span>
+          </p>
+          <Button variant="secondary" className="justify-center min-h-[44px] sm:min-h-0" onClick={reload}>
+            Reintentar
+          </Button>
+        </div>
+      )}
+
       {/* Buscadores y filtros: dos buscadores independientes (nombre / ID) + dependientes + resumen */}
       <FiltrosInventario
         esCompacto={isCompact}
+        promocionesDisponibles={promocionesDisponibles}
         filtros={filtros}
         onCambiar={cambiarFiltro}
         onAplicar={aplicarFiltros}
@@ -1319,6 +1357,7 @@ export default function Inventario() {
                     <span className="text-white font-body">{p.nombre}</span>
                     <ProveedoresResumen proveedores={p.proveedores} />
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {p.promocion && <EtiquetaPromocion promocion={p.promocion} />}
                       <span className="xl:hidden"><Badge color="gray">{p.categoriaNombre}</Badge></span>
                       {p.tieneMedidas ? <span className="2xl:hidden"><Badge color="blue">Con medidas</Badge></span> : null}
                     </div>
@@ -1328,7 +1367,7 @@ export default function Inventario() {
                     {p.precioProveedor > 0 ? fmt(p.precioProveedor) : <span className="text-surface-500">—</span>}
                   </td>
                   <td className={`${TD} font-mono whitespace-nowrap`}>
-                    {p.precioUnitario > 0 ? fmt(p.precioUnitario) : <span className="text-surface-500">—</span>}
+                    <PrecioProducto precioUnitario={p.precioUnitario} promocion={p.promocion} formatear={fmt} />
                   </td>
                   <td className={TD}>
                     <span className={`font-mono font-medium ${ESTADO_STOCK_CLASE[estadoStock(p)]}`}>{p.stockTotal}</span>

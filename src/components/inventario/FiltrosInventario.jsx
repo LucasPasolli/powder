@@ -8,7 +8,11 @@
 //     bajo stock y orden van en el panel con borrador («Aplicar»).
 //
 // Filtros dependientes: las opciones de cada desplegable se calculan con `opcionesFaceta` (lib pura):
-// sólo se ofrecen valores que dejan resultados dadas todas las demás condiciones.
+// sólo se ofrecen valores que dejan resultados dadas todas las demás condiciones. «Promoción» es la
+// excepción: SIEMPRE ofrece «Todos / En promoción / Sin promoción» (con su cantidad, aunque sea 0).
+//
+// Desktop: 2 filas (Nombre + ID / 4 desplegables) y, desde 2xl, una sola fila de 6 columnas. Con la
+// sidebar de 224 px, seis columnas en una fila no entran en 1025–1535 px sin truncar los rótulos.
 
 import { useMemo } from 'react'
 import { Hash } from 'lucide-react'
@@ -23,6 +27,8 @@ import {
 import { SORT_OPCIONES, parseOrden, valorOrden } from '../../lib/inventarioUtils'
 
 const UNIVERSO_STOCK = [{ value: 'con', label: 'Con stock' }, { value: 'sin', label: 'Sin stock' }]
+const UNIVERSO_PROMOCION = [{ value: 'con', label: 'En promoción' }, { value: 'sin', label: 'Sin promoción' }]
+const AYUDA_PROMOCION_NO_DISPONIBLE = 'No disponible: no se pudieron cargar las promociones.'
 const ETIQUETA_TODOS = 'Todos'
 
 const AYUDA_NOMBRE = 'Todas las palabras, en cualquier orden.'
@@ -43,19 +49,25 @@ const AYUDA_ID = 'Solo números. ID exacto.'
  * @param {(orden: { sortKey: string, sortDir: string }) => void} props.onOrden
  * @param {number} props.mostrados
  * @param {number} props.total
+ * @param {boolean} [props.promocionesDisponibles]  `false` si falló la carga de promociones: el filtro se deshabilita.
  */
 export default function FiltrosInventario({
   esCompacto, filtros, onCambiar, onAplicar, onLimpiar, catalogo, categorias, proveedores,
-  sortKey, sortDir, onOrden, mostrados, total,
+  sortKey, sortDir, onOrden, mostrados, total, promocionesDisponibles = true,
 }) {
   const universoCat = useMemo(
     () => categorias.map((c) => ({ value: String(c.idCategoria), label: c.nombre })), [categorias])
   const universoProv = useMemo(
     () => proveedores.map((p) => ({ value: String(p.idProveedor), label: p.nombreComercial || p.nombreFiscal })), [proveedores])
 
+  const universoDe = (faceta) => {
+    if (faceta === 'categoria') return universoCat
+    if (faceta === 'proveedor') return universoProv
+    return faceta === 'promocion' ? UNIVERSO_PROMOCION : UNIVERSO_STOCK
+  }
   const opciones = (f, faceta) => opcionesFaceta({
-    catalogo, filtros: f, faceta, etiquetaTodos: ETIQUETA_TODOS,
-    universo: faceta === 'categoria' ? universoCat : faceta === 'proveedor' ? universoProv : UNIVERSO_STOCK,
+    catalogo, filtros: f, faceta, etiquetaTodos: ETIQUETA_TODOS, universo: universoDe(faceta),
+    completa: faceta === 'promocion',
   })
 
   // Opciones del modo escritorio: se recalculan solo cuando cambian los filtros o el catálogo.
@@ -63,6 +75,7 @@ export default function FiltrosInventario({
     categoria: opciones(filtros, 'categoria'),
     proveedor: opciones(filtros, 'proveedor'),
     stock: opciones(filtros, 'stock'),
+    promocion: opciones(filtros, 'promocion'),
   }),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [esCompacto, filtros, catalogo, universoCat, universoProv])
@@ -94,10 +107,11 @@ export default function FiltrosInventario({
   if (esCompacto) {
     const valoresPanel = {
       filterCat: filtros.filterCat, filterProveedor: filtros.filterProveedor, filterStock: filtros.filterStock,
-      filterBajoStock: filtros.filterBajoStock, orden: valorOrden(sortKey, sortDir),
+      filterPromocion: filtros.filterPromocion, filterBajoStock: filtros.filterBajoStock,
+      orden: valorOrden(sortKey, sortDir),
     }
     const defaultsPanel = {
-      filterCat: TODOS, filterProveedor: TODOS, filterStock: TODOS, filterBajoStock: false,
+      filterCat: TODOS, filterProveedor: TODOS, filterStock: TODOS, filterPromocion: TODOS, filterBajoStock: false,
       orden: valorOrden('nombre', 'asc'),
     }
     // Las opciones dependen del BORRADOR del panel (más los buscadores ya aplicados), así el panel también
@@ -107,6 +121,9 @@ export default function FiltrosInventario({
       { tipo: 'select', clave: 'filterCat', etiqueta: 'Categoría', opciones: deBorrador('categoria') },
       { tipo: 'select', clave: 'filterProveedor', etiqueta: 'Proveedor', opciones: deBorrador('proveedor') },
       { tipo: 'select', clave: 'filterStock', etiqueta: 'Stock', opciones: deBorrador('stock') },
+      // Sin promociones cargadas el campo no se ofrece (el panel no admite controles deshabilitados).
+      { tipo: 'select', clave: 'filterPromocion', etiqueta: 'Promoción', opciones: deBorrador('promocion'),
+        visible: () => promocionesDisponibles },
       { tipo: 'checkbox', clave: 'filterBajoStock', etiqueta: 'Bajo stock', texto: 'Solo bajo stock' },
       { tipo: 'select', clave: 'orden', etiqueta: 'Ordenar por',
         opciones: SORT_OPCIONES.map((o) => ({ value: o.value, label: o.label })) },
@@ -115,7 +132,7 @@ export default function FiltrosInventario({
       const { sortKey: k, sortDir: d } = parseOrden(b.orden)
       onAplicar({
         filterCat: b.filterCat, filterProveedor: b.filterProveedor,
-        filterStock: b.filterStock, filterBajoStock: b.filterBajoStock,
+        filterStock: b.filterStock, filterPromocion: b.filterPromocion, filterBajoStock: b.filterBajoStock,
       })
       onOrden({ sortKey: k, sortDir: d })
     }
@@ -137,15 +154,18 @@ export default function FiltrosInventario({
   // ── Desktop ───────────────────────────────────────────────────────────
   return (
     <Card className="p-4 space-y-3">
-      <div className="grid gap-3 items-start grid-cols-[minmax(0,2fr)_minmax(9rem,1fr)_repeat(3,minmax(0,1fr))]">
-        {buscadorNombre}
-        {buscadorId}
+      <div className="grid gap-3 items-start grid-cols-4 2xl:grid-cols-[minmax(0,2fr)_minmax(9rem,1fr)_repeat(4,minmax(0,1fr))]">
+        <div className="col-span-3 min-w-0 2xl:col-span-1">{buscadorNombre}</div>
+        <div className="min-w-0">{buscadorId}</div>
         <CampoSelect etiqueta="Categoría" value={filtros.filterCat} opciones={opcionesEscritorio.categoria}
           onChange={(v) => onCambiar('filterCat', v)} />
         <CampoSelect etiqueta="Proveedor" value={filtros.filterProveedor} opciones={opcionesEscritorio.proveedor}
           onChange={(v) => onCambiar('filterProveedor', v)} />
         <CampoSelect etiqueta="Stock" value={filtros.filterStock} opciones={opcionesEscritorio.stock}
           onChange={(v) => onCambiar('filterStock', v)} />
+        <CampoSelect etiqueta="Promoción" value={filtros.filterPromocion} opciones={opcionesEscritorio.promocion}
+          disabled={!promocionesDisponibles} ayuda={promocionesDisponibles ? undefined : AYUDA_PROMOCION_NO_DISPONIBLE}
+          onChange={(v) => onCambiar('filterPromocion', v)} />
       </div>
       {resumen}
     </Card>

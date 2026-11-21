@@ -9,7 +9,11 @@
 //   · Nombre → SOLO `nombre`. Sin tildes ni mayúsculas, todas las palabras presentes, en cualquier
 //     orden (mismo motor que el Presupuestador: lib/busquedaProductos).  "100" NO mira el ID.
 //   · ID     → SOLO `idProducto`. Solo dígitos, coincidencia EXACTA (nunca parcial).
-//   · Todo se combina con AND: nombre Y ID Y categoría Y proveedor Y stock Y bajo stock.
+//   · Promoción → "En promoción" = tiene una promoción vigente HOY (la que resuelve
+//     lib/promocionProducto, la misma regla del Presupuestador y la lista de precios); "Sin promoción" = el resto.
+//     `producto.promocion === undefined` significa "no evaluada" (falló la carga de promociones): el criterio
+//     no excluye a nadie, en vez de mostrar una lista vacía engañosa.
+//   · Todo se combina con AND: nombre Y ID Y categoría Y proveedor Y stock Y bajo stock Y promoción.
 //   · Filtros dependientes: cada desplegable ofrece únicamente valores que dejan al menos un
 //     producto dadas TODAS las demás condiciones (faceted search). "Todos" siempre está disponible.
 
@@ -24,6 +28,9 @@ export const TODOS = 'all'
 /** Valores válidos del filtro de stock. */
 export const VALORES_STOCK = /** @type {const} */ (['all', 'con', 'sin'])
 
+/** Valores válidos del filtro de promoción: Todos / En promoción / Sin promoción. */
+export const VALORES_PROMOCION = /** @type {const} */ (['all', 'con', 'sin'])
+
 /** Tope de caracteres del buscador por nombre (evita pegados absurdos; los nombres reales son cortos). */
 export const MAX_CARACTERES_NOMBRE = 120
 
@@ -37,11 +44,17 @@ export const FILTROS_INICIALES = Object.freeze({
   filterCat: TODOS,
   filterProveedor: TODOS,
   filterStock: TODOS,
+  filterPromocion: TODOS,
   filterBajoStock: false,
 })
 
 // Clave de estado de cada faceta.
-const CLAVE_FACETA = { categoria: 'filterCat', proveedor: 'filterProveedor', stock: 'filterStock' }
+// `promocion` NO está en FACETAS: se cuenta (para mostrar "En promoción (12)") pero jamás se reinicia sola.
+// Que no haya productos en promoción es información válida, y si fallara la carga de promociones un reinicio
+// automático borraría el filtro que el usuario había elegido.
+const CLAVE_FACETA = {
+  categoria: 'filterCat', proveedor: 'filterProveedor', stock: 'filterStock', promocion: 'filterPromocion',
+}
 
 /**
  * @typedef {typeof FILTROS_INICIALES} Filtros
@@ -53,6 +66,7 @@ const CLAVE_FACETA = { categoria: 'filterCat', proveedor: 'filterProveedor', sto
  * @property {number|null} idCategoria
  * @property {number|null} idProveedor
  * @property {'all'|'con'|'sin'} stock
+ * @property {'all'|'con'|'sin'} promocion
  * @property {boolean}  bajoStock
  */
 
@@ -79,6 +93,7 @@ export function compilarCriterios(filtros) {
     idCategoria: aEnteroOTodos(f.filterCat),
     idProveedor: aEnteroOTodos(f.filterProveedor),
     stock: VALORES_STOCK.includes(f.filterStock) ? f.filterStock : TODOS,
+    promocion: VALORES_PROMOCION.includes(f.filterPromocion) ? f.filterPromocion : TODOS,
     bajoStock: f.filterBajoStock === true,
   }
 }
@@ -90,7 +105,7 @@ const tieneProveedor = (p, idProveedor) => (p.proveedores ?? []).some((pv) => pv
  * ¿El producto cumple TODOS los criterios (AND)?
  * @param {any} p  Producto (idealmente con `nombreNormalizado`, ver `prepararCatalogo`).
  * @param {Criterios} c
- * @param {'categoria'|'proveedor'|'stock'|null} [omitir]  Faceta que se ignora (para contar sus opciones).
+ * @param {'categoria'|'proveedor'|'stock'|'promocion'|null} [omitir]  Faceta que se ignora (para contar sus opciones).
  */
 export function cumpleCriterios(p, c, omitir = null) {
   // ID exacto. Si el ID tecleado no puede existir (`idProducto === null`) nada coincide.
@@ -104,6 +119,12 @@ export function cumpleCriterios(p, c, omitir = null) {
     if (c.stock === 'con' && !(p.stockTotal > 0)) return false
     if (c.stock === 'sin' && p.stockTotal !== 0) return false
   }
+  // `undefined` = promoción no evaluada → no se puede afirmar ni negar: no excluye (ver cabecera).
+  if (omitir !== 'promocion' && c.promocion !== TODOS && p.promocion !== undefined) {
+    const enPromocion = p.promocion !== null
+    if (c.promocion === 'con' && !enPromocion) return false
+    if (c.promocion === 'sin' && enPromocion) return false
+  }
   if (c.bajoStock && !esBajoStock(p)) return false
   return true
 }
@@ -114,7 +135,7 @@ export function cumpleCriterios(p, c, omitir = null) {
  *
  * @param {any[]} catalogo
  * @param {Partial<Filtros>} filtros
- * @param {'categoria'|'proveedor'|'stock'} faceta
+ * @param {'categoria'|'proveedor'|'stock'|'promocion'} faceta
  * @returns {Map<string, number>}  clave = valor del desplegable ('12', 'con', ...)
  */
 export function contarFaceta(catalogo, filtros, faceta) {
@@ -127,7 +148,9 @@ export function contarFaceta(catalogo, filtros, faceta) {
     if (!cumpleCriterios(p, criterios, faceta)) continue
     if (faceta === 'categoria') sumar(String(p.idCategoria))
     else if (faceta === 'proveedor') new Set((p.proveedores ?? []).map((pv) => pv.idProveedor)).forEach((id) => sumar(String(id)))
-    else sumar(p.stockTotal > 0 ? 'con' : 'sin') // stock >= 0 por esquema; 0 = sin stock
+    else if (faceta === 'promocion') {
+      if (p.promocion !== undefined) sumar(p.promocion !== null ? 'con' : 'sin') // sin evaluar: no cuenta
+    } else sumar(p.stockTotal > 0 ? 'con' : 'sin') // stock >= 0 por esquema; 0 = sin stock
   }
   return cuenta
 }
@@ -140,16 +163,18 @@ export function contarFaceta(catalogo, filtros, faceta) {
  * @param {object} p
  * @param {any[]} p.catalogo
  * @param {Partial<Filtros>} p.filtros
- * @param {'categoria'|'proveedor'|'stock'} p.faceta
+ * @param {'categoria'|'proveedor'|'stock'|'promocion'} p.faceta
  * @param {Array<{ value: string, label: string }>} p.universo  Todas las opciones posibles (sin "Todos").
  * @param {string} p.etiquetaTodos
+ * @param {boolean} [p.completa]  Ofrece SIEMPRE todo el universo, aunque alguna opción quede en 0 (se ve "(0)").
+ *   Lo usa "Promoción": sus opciones son fijas ("En promoción" / "Sin promoción"), no un dato del catálogo.
  * @returns {Array<{ value: string, label: string, cantidad: number|null }>}
  */
-export function opcionesFaceta({ catalogo, filtros, faceta, universo, etiquetaTodos }) {
+export function opcionesFaceta({ catalogo, filtros, faceta, universo, etiquetaTodos, completa = false }) {
   const cuenta = contarFaceta(catalogo, filtros, faceta)
   const elegido = String({ ...FILTROS_INICIALES, ...filtros }[CLAVE_FACETA[faceta]])
   const opciones = universo
-    .filter((o) => (cuenta.get(o.value) ?? 0) > 0 || o.value === elegido)
+    .filter((o) => completa || (cuenta.get(o.value) ?? 0) > 0 || o.value === elegido)
     .map((o) => ({ value: o.value, label: o.label, cantidad: cuenta.get(o.value) ?? 0 }))
   return [{ value: TODOS, label: etiquetaTodos, cantidad: null }, ...opciones]
 }
@@ -194,6 +219,9 @@ export function describirCriterios(f, { nombreCategoria = (x) => x, nombreProvee
   if (f.filterCat !== TODOS) lista.push({ clave: 'filterCat', etiqueta: 'Categoría', valor: nombreCategoria(String(f.filterCat)) })
   if (f.filterProveedor !== TODOS) lista.push({ clave: 'filterProveedor', etiqueta: 'Proveedor', valor: nombreProveedor(String(f.filterProveedor)) })
   if (f.filterStock !== TODOS) lista.push({ clave: 'filterStock', etiqueta: 'Stock', valor: f.filterStock === 'con' ? 'Con stock' : 'Sin stock' })
+  if (f.filterPromocion && f.filterPromocion !== TODOS) {
+    lista.push({ clave: 'filterPromocion', etiqueta: 'Promoción', valor: f.filterPromocion === 'con' ? 'En promoción' : 'Sin promoción' })
+  }
   if (f.filterBajoStock) lista.push({ clave: 'filterBajoStock', etiqueta: 'Bajo stock', valor: 'Sí' })
   return lista
 }

@@ -9,10 +9,11 @@
 //   3. descargarArchivo()            → Único punto con side-effects de navegador.
 //
 // La regla de negocio de "qué promoción gana y cuánto descuenta" NO se duplica:
-// se reutiliza calcularPromocionParaItem() de promocionesService, la misma que
-// usa el Presupuestador. Así la lista exportada y el cobro real no pueden divergir.
+// vive en lib/promocionProducto (que a su vez reutiliza calcularPromocionParaItem(),
+// la misma que usa el Presupuestador) y es la MISMA que usa el listado de Inventario.
+// Así la lista exportada, la pantalla y el cobro real no pueden divergir.
 
-import { calcularPromocionParaItem } from '../services/promocionesService'
+import { filtrarPromocionesCalculables, resolverPromocionProducto, redondearPrecio } from './promocionProducto'
 
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
@@ -55,27 +56,6 @@ export function sanitizarTexto(valor) {
 
 // ─── Lógica pura ──────────────────────────────────────────────────────────────
 
-const redondear2 = (n) => Math.round(n * 100) / 100
-
-/**
- * Una promoción solo participa de la lista si su `valor` es coherente.
- * calcularPromocionParaItem usa Math.max(0, valor): un `precio_fijo` con valor
- * null/inválido terminaría publicando precio $0. Se filtra ANTES de elegir
- * ganadora para que una promo corrupta no tape a una válida de menor alcance.
- */
-function promoEsCalculable(promo) {
-  switch (promo.tipo) {
-    case 'porcentaje_producto':
-      return Number.isFinite(promo.valor) && promo.valor > 0 && promo.valor <= 100
-    case 'precio_fijo':
-      return Number.isFinite(promo.valor) && promo.valor > 0
-    case '2x1':
-      return true
-    default:
-      return false // tipo desconocido: no se aplica (fail-safe → precio regular)
-  }
-}
-
 function construirEtiqueta(promo) {
   switch (promo.tipo) {
     case 'porcentaje_producto':
@@ -104,31 +84,20 @@ function construirEtiqueta(promo) {
  * @returns {FilaListaPrecios[]}
  */
 export function construirFilasListaPrecios(productos, promosVigentes = []) {
-  const promos = (promosVigentes ?? []).filter(promoEsCalculable)
+  const promos = filtrarPromocionesCalculables(promosVigentes)
 
   return productos.map((p) => {
-    const precioOriginal = redondear2(Number(p.precioUnitario) || 0)
-
-    const { promoAplicada, precioFinal } = calcularPromocionParaItem(
-      {
-        idProducto: p.idProducto,
-        idCategoria: p.idCategoria,
-        precioUnitario: precioOriginal,
-        cantidad: 1,
-      },
-      promos,
-    )
-
-    const baja = Boolean(promoAplicada) && precioFinal < precioOriginal
-    const esDosPorUno = promoAplicada?.tipo === '2x1'
+    const precioOriginal = redondearPrecio(Number(p.precioUnitario) || 0)
+    // null = sin promoción informable (no hay, o no baja el precio y no es 2×1).
+    const promo = resolverPromocionProducto(p, promos)
 
     return {
       codigo: p.idProducto,
       producto: sanitizarTexto(p.nombre),
       precioOriginal,
-      precioFinal: baja ? precioFinal : precioOriginal,
-      enPromo: baja,
-      etiqueta: baja || esDosPorUno ? construirEtiqueta(promoAplicada) : '',
+      precioFinal: promo?.reducePrecio ? promo.precioFinal : precioOriginal,
+      enPromo: Boolean(promo?.reducePrecio),
+      etiqueta: promo ? construirEtiqueta(promo) : '',
     }
   })
 }
