@@ -13,7 +13,7 @@
 // las opciones salen de este catálogo, no de lo que haya en la tabla.
 //
 // Esta lista espeja el CHECK de `producto_medida.medida` y la función SQL
-// `sembrar_medidas_producto` (sql/20261107_medidas_producto_consistencia.sql).
+// `sembrar_medidas_producto`.
 // Si se agrega una medida, hay que tocar los tres lugares.
 
 export const MEDIDAS_VALIDAS = Object.freeze([

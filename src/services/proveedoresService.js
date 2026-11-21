@@ -11,7 +11,7 @@ function manejarError(operacion, error) {
 }
 
 // Mensajes controlados para los códigos de error que puede lanzar el RPC
-// `actualizar_precio_por_proveedor` (ver sql/actualizar_precio_por_proveedor.sql).
+// `actualizar_precio_por_proveedor`.
 // Traduce códigos internos a texto para el usuario sin filtrar detalles de
 // infraestructura (nombres de constraint, de función, etc.) hacia la UI.
 const MENSAJES_ERROR_ACTUALIZACION_PRECIOS = {
@@ -155,7 +155,7 @@ export async function contarProductosDeProveedor(idProveedor) {
  * multiplica por 1.10.
  *
  * Delegado íntegramente en la función de base `actualizar_precio_por_proveedor`
- * (ver sql/actualizar_precio_por_proveedor.sql) para que el cálculo y el
+ * para que el cálculo y el
  * UPDATE masivo corran en una única transacción atómica del lado del
  * servidor — nunca en un loop de updates individuales desde el cliente.
  *

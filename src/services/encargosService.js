@@ -4,7 +4,7 @@
  * Regla del proyecto: los componentes NUNCA hablan con Supabase directamente.
  *
  * Escritura → SIEMPRE por RPC transaccional (crear_encargo_cliente, cancelar_encargo_cliente);
- *             las tablas no aceptan INSERT/UPDATE/DELETE desde el cliente (ver la migración).
+ *             las tablas no aceptan INSERT/UPDATE/DELETE desde el cliente.
  * Lectura   → consultas con relaciones (UNA query por pantalla, no una por encargo).
  *
  * Seguridad:

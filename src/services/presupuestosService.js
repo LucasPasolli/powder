@@ -79,8 +79,7 @@ function mapDetalle(row) {
 // FIX: se separa el término en palabras, se normalizan (sin tildes,
 // minúsculas) y se exige que TODAS aparezcan — sin importar el orden —
 // dentro de `busqueda_cliente`, una columna GENERATED en Postgres que
-// concatena y normaliza nombre + apellido (ver migración
-// `supabase/migrations/*_busqueda_cliente_multiword.sql`).
+// concatena y normaliza nombre + apellido.
 //
 // Cada palabra se agrega como una llamada `.ilike()` INDEPENDIENTE (no
 // `.or()`): PostgREST combina con AND los filtros que llegan como query
@@ -203,8 +202,7 @@ export async function obtenerPresupuestos({
   if (fechaDesde)  q = q.gte('fecha', fechaDesde)
   if (fechaHasta)  q = q.lte('fecha', fechaHasta)
   if (metodoPago) {
-    // Split Payment: es una categoría PROPIA del filtro. `es_split` (ver
-    // sql/2026_split_payment_02_filtro_metodo.sql) separa los cobros divididos:
+    // Split Payment: es una categoría PROPIA del filtro. `es_split` separa los cobros divididos:
     //   · 'split'                    → sólo los cobrados con split.
     //   · 'efectivo'/'transferencia' → sólo método único (excluye los split).
     if (metodoPago === 'split') {

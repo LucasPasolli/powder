@@ -9,8 +9,6 @@
 // Patrón: Transaction Script en el servidor (RPC `guardar_pedido_compra`) +
 // Facade en el cliente. El cliente NUNCA orquesta varias escrituras: una sola
 // llamada, una sola transacción → el número de requests no depende de N ítems.
-//
-// Ver sql/20261024_guardar_pedido_compra.sql.
 
 import { supabase } from '../lib/supabase'
 import { mapPedido, mapDetallePedido } from './pedidosService'

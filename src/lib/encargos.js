@@ -8,8 +8,7 @@
  *       └─────────────┴──────► Cancelado
  *
  * La base de datos hace cumplir las mismas reglas (CHECKs, trigger de transiciones,
- * RPC): esto sólo decide qué muestra y qué permite la UI. Ver
- * sql/20261117_01_encargos_cliente.sql.
+ * RPC): esto sólo decide qué muestra y qué permite la UI.
  *
  * @module lib/encargos
  */

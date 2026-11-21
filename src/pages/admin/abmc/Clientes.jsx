@@ -1,5 +1,4 @@
 // src/pages/admin/abmc/Clientes.jsx
-// Migrado desde ABMC.jsx sin cambios funcionales (Task 2).
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Button, Input, Modal, Table, Tr, Td, Card } from '../../../components/ui'
 import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'

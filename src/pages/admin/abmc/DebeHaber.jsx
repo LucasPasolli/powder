@@ -1,5 +1,4 @@
 // src/pages/admin/abmc/DebeHaber.jsx
-// Migrado desde ABMC.jsx sin cambios funcionales (Task 2).
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Button, Input, Select, Modal, Table, Tr, Td, Badge, Card, Spinner } from '../../../components/ui'
 import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'

@@ -221,7 +221,7 @@ export async function buscarProductos({ texto = '', idCategoria = null, idProvee
     const { data, error } = await supabase.rpc('productos_stock_critico')
     if (error) manejarError('buscarProductos(stockCritico)', error)
     // Defensa en profundidad: la función productos_stock_critico() ya filtra
-    // `activo = true` en el origen (ver 002_baja_logica_productos.sql), pero
+    // `activo = true` en el origen, pero
     // se repite acá por si la función se recrea en el futuro sin ese filtro.
     const filtrado = soloActivos ? data.filter((row) => row.activo !== false) : data
     return filtrado.map(row => ({ ...mapProducto(row), categoria: row.categoria_nombre ?? null }))
@@ -415,7 +415,7 @@ function serializarProductoParaRpc(producto) {
  *   INSERT INTO producto_proveedor (id_producto, id_proveedor) VALUES (...) × N
  *
  * Ambas operaciones corren atómicamente del lado del servidor (función
- * `crear_producto_con_proveedores`, ver 004_producto_proveedor.sql) para que
+ * `crear_producto_con_proveedores`) para que
  * nunca quede un producto creado sin sus proveedores por una falla de red
  * entre el insert de cabecera y el de asociaciones.
  *
@@ -522,7 +522,7 @@ export async function actualizarPrecioProveedor(idProducto, precioProveedor) {
  * (producto.activo = false) en su lugar. Resolver esto en el servidor evita
  * condiciones de carrera (dos usuarios operando sobre el mismo producto a
  * la vez) y evita filtrar errores de base de datos (código, constraint,
- * nombre de tabla) hacia la interfaz — ver ficha SQL 002_baja_logica_productos.sql.
+ * nombre de tabla) hacia la interfaz.
  *
  * @returns {'eliminado' | 'baja_logica'} resultado de la operación, para que
  *          la UI pueda informar al usuario qué ocurrió realmente.

@@ -775,8 +775,7 @@ export async function actualizarSaldo(idSaldo, { monto, fechaVto }) {
  */
 
 /**
- * Revierte el pago de un saldo de forma ATÓMICA (RPC `fn_revertir_pago_saldo`,
- * ver sql/2026_revertir_pago_saldo.sql):
+ * Revierte el pago de un saldo de forma ATÓMICA (RPC `fn_revertir_pago_saldo`):
  *
  *   · el saldo vuelve a 'pendiente' por su monto ORIGINAL completo, sin fecha
  *     de pago,
@@ -845,7 +844,7 @@ export async function revertirPagoSaldo(idSaldo) {
 
 /**
  * Elimina un saldo de forma ATÓMICA y consistente (RPC
- * `fn_eliminar_saldo_con_reversion`, ver sql/2026_eliminar_saldo_con_reversion.sql):
+ * `fn_eliminar_saldo_con_reversion`):
  *
  *   · borra los cobros imputados al saldo (dejan de contarse en Estadísticas
  *     y en el PDF de Facturación),

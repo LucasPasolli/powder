@@ -92,7 +92,7 @@ function Toast({ message, visible, onDone, type = 'success' }) {
 
 // ─── Selector múltiple de proveedores ──────────────────────────────────────
 //
-// Un producto puede tener 0..N proveedores asociados (ver 004_producto_proveedor.sql).
+// Un producto puede tener 0..N proveedores asociados.
 // No existe un componente <MultiSelect> en components/ui, así que se resuelve
 // acá con un combobox accesible: botón que abre un panel de checkboxes,
 // navegable por teclado y anunciado por lectores de pantalla (role="listbox",
@@ -493,7 +493,7 @@ function StockModal({ open, onClose, producto, onSaved }) {
     try {
       // Si el cambio de atributo falla NO se sigue: evita dejar stock por medida
       // cargado en un producto que sigue figurando "sin medidas". Las filas de
-      // producto_medida las completa además el trigger de base (ver migración SQL).
+      // producto_medida las completa además el trigger de base.
       const { error: errAtributo } = await supabase.from('producto').update({ tiene_medidas: true }).eq('id_producto', producto.idProducto)
       if (errAtributo) throw errAtributo
       for (const medida of medidasStock) {

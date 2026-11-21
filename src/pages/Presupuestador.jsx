@@ -1354,7 +1354,7 @@ export default function Presupuestador({ presupuestoEditar, onEditarVolver, onVe
         // monto ≈ round(Σ detalle.subtotal × factor, 2). Como el ajuste ya no es uniforme
         // (los ítems con promoción quedan fuera), `factor` se envía como factor mezclado
         // (monto / Σ subtotal): sigue cumpliendo esa igualdad. Los campos nuevos permiten
-        // que el servidor valide con la regla real (ver sql/calcular_total_presupuesto.sql).
+        // que el servidor valide con la regla real.
         factor:            factorCompatibleRpc(totalFinal, detalles),
         factorMetodo:      factorReal,
         subtotalPromo,

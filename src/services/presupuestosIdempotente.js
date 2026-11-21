@@ -104,9 +104,8 @@ export async function crearPresupuestoIdempotente({ clave, cabecera, detalles })
  *   presupuesto en el momento de eliminarlo ('borrador'|'aprobado'|'pagado'|
  *   'rechazado').
  * @property {boolean}              reintegrado         `true` si correspondía
- *   reintegrar stock (el presupuesto ya había descontado — ver nota de
- *   diseño en la migración SQL sobre por qué esto incluye 'aprobado' además
- *   de 'pagado').
+ *   reintegrar stock (el presupuesto ya había descontado — esto incluye
+ *   'aprobado' además de 'pagado').
  * @property {ItemReintegro[]}      itemsReintegrados
  * @property {ItemNoReintegrado[]}  itemsNoReintegrados En 0 en el caso feliz;
  *   si trae elementos, hay productos que no se pudieron reponer (fueron

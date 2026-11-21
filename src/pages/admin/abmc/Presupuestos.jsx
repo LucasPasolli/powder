@@ -1,5 +1,4 @@
 // src/pages/admin/abmc/Presupuestos.jsx
-// Migrado desde ABMC.jsx sin cambios funcionales (Task 2).
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button, Select, Modal, Table, Tr, Td, Badge, Card } from '../../../components/ui'
 import DateField from '../../../components/ui/DateField'

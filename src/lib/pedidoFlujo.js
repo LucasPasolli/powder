@@ -5,7 +5,7 @@
 //     Original ──► Facturado ──► Recibido        (sin saltos ni retrocesos)
 //
 // Funciones puras: sin React ni red. La base de datos las hace cumplir con
-// triggers (sql/20261114_01_flujo_pedido_compra.sql); esto sólo decide qué
+// triggers; esto sólo decide qué
 // acciones muestra la UI. «Anular» un pedido = eliminarlo (eliminarPedido).
 
 export const ESTADO = Object.freeze({

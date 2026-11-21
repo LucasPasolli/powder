@@ -1,8 +1,7 @@
 // src/services/pagosService.js
 //
 // Motor de Pago Parcial. Toda la lógica de imputación cronológica vive en
-// el servidor (función `fn_aplicar_pago_cliente` en Postgres, ver
-// migration_pago_parcial.sql) para garantizar atomicidad: si dos pagos del
+// el servidor (función `fn_aplicar_pago_cliente` en Postgres) para garantizar atomicidad: si dos pagos del
 // mismo cliente llegan casi al mismo tiempo, la transacción de Postgres con
 // FOR UPDATE evita que se pisen o dupliquen imputaciones.
 //
