@@ -1,5 +1,4 @@
 // src/pages/admin/abmc/Inversiones.jsx
-// Migrado desde ABMC.jsx sin cambios funcionales (Task 2).
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Button, Input, Select, Modal, Table, Tr, Td, Badge, Card } from '../../../components/ui'
 import DateField from '../../../components/ui/DateField'

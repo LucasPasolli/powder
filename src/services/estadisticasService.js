@@ -230,7 +230,7 @@ async function _obtenerSaldosPendientesGlobal() {
  * `_obtenerSaldosPendientesGlobal` para la deuda viva.
  *
  * La agregación (GROUP BY) corre en Postgres vía la RPC
- * `fn_demora_pago_por_cliente` (ver migration_demora_pago_cliente.sql) —
+ * `fn_demora_pago_por_cliente` —
  * mismo enfoque que ya usa `pagosService.registrarPagoParcial` con
  * `fn_aplicar_pago_cliente` — así que este helper solo mapea snake_case
  * → camelCase, no trae filas sueltas ni agrega nada en JS.
@@ -281,7 +281,7 @@ function _calcularMixMetodos(presupuestos) {
  * Usa la RPC productos_vendidos_periodo() (Postgres), que hace el JOIN
  * presupuesto↔detalle_presupuesto↔producto y el GROUP BY por producto
  * server-side, devolviendo ya una fila por producto (no una por venta) y
- * ordenada por monto DESC. Ver /sql/2026_productos_vendidos_periodo_rpc.sql.
+ * ordenada por monto DESC.
  *
  * - productosPorIngresos: se usa tal cual viene de la RPC (ya ordenado por
  *   monto DESC), sin reordenar en JS.
@@ -862,7 +862,6 @@ async function _obtenerMargenBruto(desde, hasta) {
  * precio) server-side sobre productos activos y devuelve además el listado
  * de productos con precio incompleto. Un solo round-trip, y solo viajan
  * agregados + una lista normalmente chica — nunca el catálogo completo.
- * Ver /sql/2026_valor_inventario_rpc.sql para la definición de la función.
  *
  * Escenario 6 (datos incompletos): las columnas precio_proveedor/precio_unitario
  * son NOT NULL en el schema, así que "sin precio cargado" se representa como

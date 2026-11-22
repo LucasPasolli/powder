@@ -221,7 +221,7 @@ export async function buscarProductos({ texto = '', idCategoria = null, idProvee
     const { data, error } = await supabase.rpc('productos_stock_critico')
     if (error) manejarError('buscarProductos(stockCritico)', error)
     // Defensa en profundidad: la función productos_stock_critico() ya filtra
-    // `activo = true` en el origen (ver 002_baja_logica_productos.sql), pero
+    // `activo = true` en el origen, pero
     // se repite acá por si la función se recrea en el futuro sin ese filtro.
     const filtrado = soloActivos ? data.filter((row) => row.activo !== false) : data
     return filtrado.map(row => ({ ...mapProducto(row), categoria: row.categoria_nombre ?? null }))
@@ -349,6 +349,47 @@ export async function buscarProductoActivoPorId(idProducto) {
   return data ? mapProductoBusqueda(data) : null
 }
 
+const TAMANO_LOTE_STOCK = 200 // ids por request: mantiene corta la URL de PostgREST (`in.(...)`)
+
+/**
+ * Stock VIGENTE de varios productos en 2 consultas por lote (no N+1): el producto y sus medidas.
+ * Lo usa el detalle interno de un presupuesto para recalcular las advertencias de stock con el
+ * dato actual (ver lib/stockPresupuesto.js). Es de solo lectura.
+ *
+ * Los ids que ya no existen simplemente no aparecen en el resultado (el consumidor los trata
+ * como "stock desconocido": no se advierte nada sobre ellos).
+ *
+ * @param {Array<number|string>} ids
+ * @returns {Promise<Map<number, import('../lib/stockPresupuesto').StockProducto>>}
+ */
+export async function obtenerStockActualPorProductos(ids) {
+  const unicos = [...new Set((ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= MAX_ID_INT4))]
+  const resultado = new Map()
+  if (unicos.length === 0) return resultado
+
+  for (let i = 0; i < unicos.length; i += TAMANO_LOTE_STOCK) {
+    const lote = unicos.slice(i, i + TAMANO_LOTE_STOCK)
+    const [prods, meds] = await Promise.all([
+      supabase.from('producto').select('id_producto, cantidad, tiene_medidas').in('id_producto', lote),
+      supabase.from('producto_medida').select('id_producto, medida, cantidad').in('id_producto', lote),
+    ])
+    if (prods.error) manejarError('obtenerStockActualPorProductos(producto)', prods.error)
+    if (meds.error)  manejarError('obtenerStockActualPorProductos(medidas)', meds.error)
+
+    for (const row of prods.data) {
+      resultado.set(row.id_producto, {
+        tieneMedidas: Boolean(row.tiene_medidas),
+        cantidad:     row.cantidad ?? 0,
+        medidas:      [],
+      })
+    }
+    for (const row of meds.data) {
+      resultado.get(row.id_producto)?.medidas.push({ medida: row.medida, cantidad: row.cantidad ?? 0 })
+    }
+  }
+  return resultado
+}
+
 // ─── Mutaciones de Producto ───────────────────────────────────────────────────
 
 /**
@@ -374,7 +415,7 @@ function serializarProductoParaRpc(producto) {
  *   INSERT INTO producto_proveedor (id_producto, id_proveedor) VALUES (...) × N
  *
  * Ambas operaciones corren atómicamente del lado del servidor (función
- * `crear_producto_con_proveedores`, ver 004_producto_proveedor.sql) para que
+ * `crear_producto_con_proveedores`) para que
  * nunca quede un producto creado sin sus proveedores por una falla de red
  * entre el insert de cabecera y el de asociaciones.
  *
@@ -481,7 +522,7 @@ export async function actualizarPrecioProveedor(idProducto, precioProveedor) {
  * (producto.activo = false) en su lugar. Resolver esto en el servidor evita
  * condiciones de carrera (dos usuarios operando sobre el mismo producto a
  * la vez) y evita filtrar errores de base de datos (código, constraint,
- * nombre de tabla) hacia la interfaz — ver ficha SQL 002_baja_logica_productos.sql.
+ * nombre de tabla) hacia la interfaz.
  *
  * @returns {'eliminado' | 'baja_logica'} resultado de la operación, para que
  *          la UI pueda informar al usuario qué ocurrió realmente.

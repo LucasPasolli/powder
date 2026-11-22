@@ -159,13 +159,13 @@ async function sumarSaldosPendientes() {
  * Cuenta pedidos de compra pendientes de recibir.
  * Equivale a:
  *   SELECT COUNT(*) FROM PedidoCompra
- *   WHERE estadoLogistico IN ('encargado','revisar')
+ *   WHERE estadoLogistico IN ('original','facturado')   -- aún sin recepción
  */
 async function contarPedidosPendientes() {
   const { count, error } = await supabase
     .from('pedido_compra')
     .select('*', { count: 'exact', head: true })
-    .in('estado_logistico', ['encargado', 'revisar'])
+    .in('estado_logistico', ['original', 'facturado'])
 
   if (error) manejarError('contarPedidosPendientes', error)
   return count ?? 0

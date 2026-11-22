@@ -2,7 +2,6 @@
 // Todas las operaciones de PedidoCompra y DetallePedidoCompra pasan por aquí.
 
 import { supabase } from '../lib/supabase'
-import { agregarStock, descontarStock, actualizarPrecioProveedor, obtenerMaxPrecioProveedorEnPedidos } from './productosService'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -20,6 +19,7 @@ const MENSAJES_ERROR_PEDIDO = {
   no_autorizado:        'No tenés permisos para realizar esta operación.',
   // Recepción: una línea de un producto "con medidas" no tiene medida asignada.
   medida_requerida:     'Hay productos con medidas sin medida asignada. Editá el pedido y elegí la medida antes de recibirlo.',
+  transicion_no_permitida: 'El estado de entrega sólo cambia registrando la factura o la recepción del pedido.',
 }
 
 function manejarErrorRpc(operacion, error) {
@@ -46,6 +46,10 @@ export function mapPedido(row) {
     // ─── Cuenta Corriente con cuotas ────────────────────────────
     diasVencimientoCC: row.dias_vencimiento_cc,
     tieneCuotas:       row.tiene_cuotas,
+    // ─── Flujo Original → Facturado → Recibido ──────────────────
+    // montoOriginal NULL = pedido anterior al nuevo flujo (sin versión original).
+    fechaFacturacion:  row.fecha_facturacion ?? null,
+    montoOriginal:     row.monto_original == null ? null : Number(row.monto_original),
   }
 }
 
@@ -58,8 +62,12 @@ export function mapDetallePedido(row) {
     nombreProducto:  row.nombre_producto,
     medida:          row.medida,
     cantidad:        row.cantidad,
+    // precioUnitario = precio de LISTA. El costo real es precioConDescuento si existe.
     precioUnitario:  Number(row.precio_unitario),
+    precioConDescuento: row.precio_con_descuento == null ? null : Number(row.precio_con_descuento),
     subtotal:        Number(row.subtotal),
+    // null mientras el pedido no esté Recibido; sólo esta cantidad suma al stock.
+    cantidadRecibida: row.cantidad_recibida ?? null,
   }
 }
 
@@ -72,7 +80,7 @@ export function mapDetallePedido(row) {
  */
 export async function obtenerPedidos({
   estadoPago      = null,  // 'pendiente' | 'pagado'
-  estadoLogistico = null,  // 'encargado' | 'recibido' | 'revisar'
+  estadoLogistico = null,  // 'original' | 'facturado' | 'recibido'
   idProveedor     = null,
   fechaDesde      = null,  // 'YYYY-MM-DD'
   fechaHasta      = null,  // 'YYYY-MM-DD'
@@ -169,7 +177,7 @@ export async function crearPedido(pedido, detalles) {
       fecha:               pedido.fecha,
       monto:               pedido.monto           ?? 0,
       estado_pago:         pedido.estadoPago       ?? 'pendiente',
-      estado_logistico:    pedido.estadoLogistico  ?? 'encargado',
+      estado_logistico:    pedido.estadoLogistico  ?? 'original', // el servidor fuerza 'original' al insertar
       fecha_recepcion:     pedido.fechaRecepcion   ?? null,
       fecha_pago:          pedido.fechaPago        ?? null,
       metodo_pago:         pedido.metodoPago       ?? 'efectivo',
@@ -210,95 +218,6 @@ export async function crearPedido(pedido, detalles) {
 }
 
 /**
- * @deprecated El formulario usa pedidosGuardadoService.guardarPedido (RPC atómica en lote).
- * Esta versión tiene N+1 y no es atómica; no usar en código nuevo.
- *
- * Actualiza cabecera y detalles de un pedido existente.
- * Si el pedido cambia de estado logístico a 'recibido', ajusta el stock.
- * Equivale a la lógica compleja de guardarPedido() en PedidosCompra.jsx.
- */
-export async function actualizarPedido(idPedido, pedido, detalles) {
-  // 1. Leer estado logístico anterior para saber si hay que ajustar stock
-  const pedidoAnterior = await obtenerPedidoPorId(idPedido)
-  const estabaRecibido = pedidoAnterior.estadoLogistico === 'recibido'
-  const pasaARecibido  = pedido.estadoLogistico === 'recibido'
-
-  // 2. Actualizar cabecera
-  const { error: e1 } = await supabase
-    .from('pedido_compra')
-    .update({
-      fecha:               pedido.fecha,
-      monto:               pedido.monto,
-      estado_pago:         pedido.estadoPago,
-      estado_logistico:    pedido.estadoLogistico,
-      fecha_recepcion:     pedido.fechaRecepcion  ?? null,
-      fecha_pago:          pedido.fechaPago       ?? null,
-      metodo_pago:         pedido.metodoPago      ?? null,
-      id_proveedor:        pedido.idProveedor     ?? null,
-      nombre_proveedor:    pedido.nombreProveedor ?? null,
-      // NO se toca tiene_cuotas acá: es inmutable una vez creado el pedido.
-      // El plan de cuotas se gestiona cuota por cuota vía
-      // pedidosCuotasService.marcarCuotaPagada, nunca reescribiendo la cabecera.
-      dias_vencimiento_cc: pedido.diasVencimientoCC ?? null,
-    })
-    .eq('id_pedido', idPedido)
-
-  if (e1) manejarError('actualizarPedido(cabecera)', e1)
-
-  // 3. Obtener detalles anteriores antes de borrarlos (para revertir stock si hace falta)
-  const detallesAnteriores = await obtenerDetallesDePedido(idPedido)
-
-  // 4. Reemplazar detalles
-  const { error: e2 } = await supabase
-    .from('detalle_pedido_compra')
-    .delete()
-    .eq('id_pedido', idPedido)
-
-  if (e2) manejarError('actualizarPedido(delete detalles)', e2)
-
-  if (detalles.length > 0) {
-    const rows = detalles.map(d => ({
-      id_pedido:       idPedido,
-      id_producto:     d.idProducto     ?? null,
-      nombre_producto: d.nombreProducto ?? null,
-      medida:          d.medida         ?? null,
-      cantidad:        d.cantidad,
-      precio_unitario: d.precioUnitario,
-      subtotal:        d.subtotal,
-    }))
-
-    const { error: e3 } = await supabase
-      .from('detalle_pedido_compra')
-      .insert(rows)
-
-    if (e3) manejarError('actualizarPedido(insert detalles)', e3)
-  }
-
-  // 5. Ajuste de stock según cambio de estado logístico
-  if (!estabaRecibido && pasaARecibido) {
-    // Acaba de marcarse como recibido → sumar stock
-    await _aplicarStockRecepcion(detalles)
-  } else if (estabaRecibido && !pasaARecibido) {
-    // Se revierte la recepción → descontar el stock que se había sumado
-    await _revertirStockRecepcion(detallesAnteriores)
-  } else if (estabaRecibido && pasaARecibido) {
-    // Sigue recibido pero cambiaron las cantidades:
-    // revertir el stock anterior y aplicar el nuevo
-    await _revertirStockRecepcion(detallesAnteriores)
-    await _aplicarStockRecepcion(detalles)
-  }
-
-  // 6. Actualizar precios proveedor con el máximo pagado
-  for (const d of detalles) {
-    if (!d.idProducto || d.precioUnitario <= 0) continue
-    const maxPrecio = await obtenerMaxPrecioProveedorEnPedidos(d.idProducto)
-    if (maxPrecio > 0) {
-      await actualizarPrecioProveedor(d.idProducto, maxPrecio)
-    }
-  }
-}
-
-/**
  * Marca un pedido como pagado.
  * Equivale a:
  *   UPDATE PedidoCompra SET estadoPago='pagado', fechaPago=? WHERE idPedido=?
@@ -316,26 +235,14 @@ export async function marcarPedidoPagado(idPedido, fechaPago) {
   if (error) manejarError('marcarPedidoPagado', error)
 }
 
-/**
- * Marca un pedido como recibido, suma el stock de todos sus productos y
- * actualiza el precio proveedor — en UNA llamada y UNA transacción
- * (RPC `recibir_pedido_compra`). Si ya estaba recibido no hace nada.
- * Antes: 2 lecturas + ~5 consultas por ítem.
- */
-export async function recibirPedido(idPedido, fechaRecepcion) {
-  const { data, error } = await supabase.rpc('recibir_pedido_compra', {
-    p_id_pedido:       idPedido,
-    p_fecha_recepcion: fechaRecepcion ?? null,
-  })
-
-  if (error) manejarErrorRpc('recibirPedido', error)
-  return mapPedido(data)
-}
+// La recepción ahora vive en pedidosFlujoService.registrarRecepcion: el stock sube
+// sólo con lo efectivamente recibido y la operación es atómica e idempotente.
 
 /**
- * Actualiza estado logístico, pago, método y fechas desde ABMC.
- * Ajusta el stock sólo en las transiciones (→recibido suma, recibido→otro
- * resta), todo en UNA transacción (RPC `actualizar_estados_pedido_compra`).
+ * Actualiza pago, método y fechas desde ABMC (RPC `actualizar_estados_pedido_compra`).
+ * El estado logístico NO se modifica desde acá: sólo cambia por el flujo
+ * (registrar factura / registrar recepción). Si `estadoLogistico` difiere del
+ * vigente, el servidor responde `transicion_no_permitida`.
  */
 export async function actualizarEstadosPedido(idPedido, {
   estadoPago,
@@ -358,40 +265,12 @@ export async function actualizarEstadosPedido(idPedido, {
 }
 
 /**
- * Elimina un pedido con sus cuotas y detalles. Si estaba recibido, revierte
- * el stock que había sumado — todo en UNA transacción (RPC `eliminar_pedido_compra`).
+ * Elimina (anula) un pedido con sus cuotas, líneas y versión original. Si estaba
+ * recibido, revierte SOLO lo efectivamente recibido — todo en UNA transacción
+ * (RPC `eliminar_pedido_compra`).
  */
 export async function eliminarPedido(idPedido) {
   const { error } = await supabase.rpc('eliminar_pedido_compra', { p_id_pedido: idPedido })
 
   if (error) manejarErrorRpc('eliminarPedido', error)
-}
-
-// ─── Helpers privados de stock ────────────────────────────────────────────────
-
-/**
- * Suma stock a los productos de una lista de detalles.
- * Actualiza también el precio proveedor con el máximo pagado.
- */
-async function _aplicarStockRecepcion(detalles) {
-  for (const d of detalles) {
-    if (!d.idProducto) continue
-    await agregarStock(d.idProducto, d.cantidad, d.medida ?? null)
-
-    if (d.precioUnitario > 0) {
-      const maxPrecio = await obtenerMaxPrecioProveedorEnPedidos(d.idProducto)
-      const precio = maxPrecio > 0 ? maxPrecio : d.precioUnitario
-      await actualizarPrecioProveedor(d.idProducto, precio)
-    }
-  }
-}
-
-/**
- * Revierte el stock sumado por una recepción anterior.
- */
-async function _revertirStockRecepcion(detalles) {
-  for (const d of detalles) {
-    if (!d.idProducto) continue
-    await descontarStock(d.idProducto, d.cantidad, d.medida ?? null)
-  }
 }

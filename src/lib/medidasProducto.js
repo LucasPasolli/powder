@@ -13,7 +13,7 @@
 // las opciones salen de este catálogo, no de lo que haya en la tabla.
 //
 // Esta lista espeja el CHECK de `producto_medida.medida` y la función SQL
-// `sembrar_medidas_producto` (sql/20261107_medidas_producto_consistencia.sql).
+// `sembrar_medidas_producto`.
 // Si se agrega una medida, hay que tocar los tres lugares.
 
 export const MEDIDAS_VALIDAS = Object.freeze([
@@ -38,13 +38,15 @@ const hayValor = (v) => v !== null && v !== undefined && String(v).trim() !== ''
 
 /**
  * Pedido "cerrado" (Escenario 4): ya no se le exige ni habilita medida en sus
- * líneas existentes. Cualquier estado logístico distinto de 'encargado'
- * (recibido, revisar, o uno futuro como 'anulado') o un pedido ya pagado.
+ * líneas existentes. Quedan ABIERTOS los estados 'original' y 'facturado'
+ * (flujo Original → Facturado → Recibido); cualquier otro (recibido o uno
+ * futuro como 'anulado') o un pedido ya pagado está cerrado.
  * @param {{estadoLogistico?: string|null, estadoPago?: string|null}|null|undefined} pedido
  */
 export function pedidoEstaCerrado(pedido) {
   if (!pedido) return false
-  return (pedido.estadoLogistico ?? 'encargado') !== 'encargado' || pedido.estadoPago === 'pagado'
+  const estado = pedido.estadoLogistico ?? 'original'
+  return (estado !== 'original' && estado !== 'facturado') || pedido.estadoPago === 'pagado'
 }
 
 // ─── Estado de una línea ─────────────────────────────────────────────────────

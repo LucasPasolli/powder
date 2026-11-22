@@ -86,6 +86,7 @@ export function parseOrden(value) {
  * @property {string} filterCat
  * @property {string} filterProveedor
  * @property {string} filterStock
+ * @property {string} [filterPromocion]
  * @property {boolean} filterBajoStock
  */
 
@@ -100,6 +101,7 @@ export function contarFiltrosAvanzados(f) {
     f.filterCat !== 'all',
     f.filterProveedor !== 'all',
     f.filterStock !== 'all',
+    (f.filterPromocion ?? 'all') !== 'all',
     f.filterBajoStock,
   ].filter(Boolean).length
 }

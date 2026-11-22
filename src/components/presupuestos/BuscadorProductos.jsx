@@ -18,6 +18,8 @@ import { buscarPorNombre, sanitizarDigitosId, LIMITE_RESULTADOS } from '../../li
 import { useCatalogoProductos } from '../../hooks/useCatalogoProductos'
 import { useProductoPorId } from '../../hooks/useProductoPorId'
 import { useOnlineStatus } from '../../hooks/useOnlineStatus'
+import EtiquetaStock from './EtiquetaStock'
+import { TIPO_STOCK } from '../../lib/stockPresupuesto'
 
 const formatoARS = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' })
 const ars = (n) => formatoARS.format(n ?? 0)
@@ -30,6 +32,9 @@ const CAMPO = `w-full bg-surface-700 border border-surface-600 rounded-xl pl-10 
 const ETIQUETA = 'block mb-1 text-surface-300 text-sm min-[1025px]:text-xs font-body'
 
 const MS_MENSAJE_AGREGADO = 3000
+
+// Estado fijo de los resultados sin stock (se agregan con cantidad 1: no hay "insuficiente" que distinguir).
+const ESTADO_SIN_STOCK = Object.freeze({ tipo: TIPO_STOCK.SIN_STOCK, disponible: 0, solicitado: 1, excedente: 1 })
 
 /** Fila de resultado: ID, nombre, precio (con la promoción vigente identificada) y stock. */
 function Resultado({ producto, promociones, idDom, activo, onElegir }) {
@@ -75,9 +80,10 @@ function Resultado({ producto, promociones, idDom, activo, onElegir }) {
           <span className="text-yellow-400 font-body">Sin precio</span>
         )}
 
-        <span className={sinStock ? 'text-red-400 font-body' : 'text-surface-300 font-body'}>
-          {sinStock ? 'Sin stock' : `Stock: ${producto.cantidad}`}
-        </span>
+        {/* El stock es solo informativo: un producto sin stock se puede elegir igual (se cotiza y se encarga). */}
+        {sinStock
+          ? <EtiquetaStock estado={ESTADO_SIN_STOCK} />
+          : <span className="text-surface-300 font-body">Stock: {producto.cantidad}</span>}
         {producto.tieneMedidas ? <span className="text-surface-400 font-body">Con medidas</span> : null}
       </div>
     </li>
@@ -220,7 +226,7 @@ export default function BuscadorProductos({ promociones, onAgregar }) {
             <Search size={16} aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" />
             <input
               id={`${uid}-nombre`} ref={refNombre} type="search" enterKeyHint="search"
-              value={textoNombre} placeholder="Nombre de producto..."
+              value={textoNombre} placeholder="Kit de Pistón..."
               onChange={(e) => alCambiarNombre(e.target.value)}
               onFocus={() => { setCampo('nombre'); catalogo.refrescarSiVencido() }}
               className={CAMPO}

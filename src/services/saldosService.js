@@ -10,6 +10,8 @@
 import { supabase } from '../lib/supabase'
 import { actualizarEstadoPresupuesto } from './presupuestosService'
 import { logger } from '../lib/logger'
+import { hoyISO } from '../lib/fechas'
+import { CAMPO_FECHA_PAGO, validarRangoFechaPago } from '../lib/saldosFiltros'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -56,8 +58,17 @@ function mapSaldo(row) {
  *   estado     – 'pendiente' | 'parcial' | 'pagado' | null (todos)
  *   idCliente  – filtra por cliente exacto
  *   fechaDesde / fechaHasta – rango por fecha_inicio
+ *   fechaPagoDesde / fechaPagoHasta – rango por fecha_pago, AMBOS EXTREMOS INCLUIDOS
+ *              y cualquiera puede omitirse (rango abierto). Se resuelve en la base
+ *              (WHERE fecha_pago >= / <=), así que los saldos sin fecha de pago
+ *              (NULL) quedan excluidos automáticamente. Un rango invertido o una
+ *              fecha mal formada lanza ANTES de consultar.
  *   vencidos   – true → solo con deuda activa y fechaVto < hoy
- *   orden      – 'asc' | 'desc' sobre fecha_vto (con deuda) o id_saldo (pagados)
+ *   ordenPor   – 'vencimiento' (default) | 'fechaPago'. Con 'fechaPago' el ORDER BY lo
+ *              hace la base: NULLS LAST en ambas direcciones (los saldos sin fecha de
+ *              pago van siempre al final) y desempate por id_saldo DESC (paginación estable).
+ *   orden      – 'asc' | 'desc'. Con ordenPor 'vencimiento': sobre fecha_vto (con deuda)
+ *              o id_saldo (pagados). Con ordenPor 'fechaPago': sobre fecha_pago.
  *   limite     – máximo de filas devueltas
  *   search     – texto libre: busca en nombre, apellido, nombre completo,
  *                idSaldo exacto e idPresupuesto exacto.
@@ -72,11 +83,23 @@ export async function obtenerSaldos({
   idCliente  = null,
   fechaDesde = null,
   fechaHasta = null,
+  fechaPagoDesde = null,
+  fechaPagoHasta = null,
   vencidos   = false,
+  ordenPor   = 'vencimiento',
   orden      = 'asc',
   limite     = 500,
   search     = '',
 } = {}) {
+  // Defensa en profundidad: la UI ya valida el rango, pero el service no confía en su llamador.
+  // El mensaje es genérico y seguro de mostrar (no filtra detalles de la base).
+  const pagoDesde = fechaPagoDesde || null
+  const pagoHasta = fechaPagoHasta || null
+  const errorRango = validarRangoFechaPago(pagoDesde, pagoHasta)
+  if (errorRango) throw new Error(errorRango)
+
+  const porFechaPago = ordenPor === CAMPO_FECHA_PAGO
+
   let q = supabase
     .from('saldo')
     .select(`
@@ -86,13 +109,25 @@ export async function obtenerSaldos({
     `)
     .limit(limite)
 
+  // Fecha de pago: columna `date` → se compara como texto ISO, sin conversión de huso horario.
+  // `gte`/`lte` incluyen ambos extremos y descartan los NULL (Escenarios 4, 5 y 8).
+  if (pagoDesde) q = q.gte('fecha_pago', pagoDesde)
+  if (pagoHasta) q = q.lte('fecha_pago', pagoHasta)
+
+  // Orden por fecha de pago EN EL SERVIDOR (Escenario 9): NULLS LAST en asc y en desc.
+  if (porFechaPago) {
+    q = q
+      .order('fecha_pago', { ascending: orden !== 'desc', nullsFirst: false })
+      .order('id_saldo', { ascending: false })
+  }
+
   if (estado)     q = q.eq('estado', estado)
   if (idCliente)  q = q.eq('id_cliente', idCliente)
   if (fechaDesde) q = q.gte('fecha_inicio', fechaDesde)
   if (fechaHasta) q = q.lte('fecha_inicio', fechaHasta)
 
   if (vencidos) {
-    const hoy = new Date().toISOString().split('T')[0]
+    const hoy = hoyISO()
     q = q.lt('fecha_vto', hoy).in('estado', ['pendiente', 'parcial'])
   }
 
@@ -121,6 +156,11 @@ export async function obtenerSaldos({
     })
   }
 
+  // Orden por fecha de pago: ya viene ordenado de la base (NULLS LAST). NO se re-ordena acá:
+  // el filtro de texto de arriba conserva el orden relativo, y un sort en JS podría romper
+  // el criterio «sin fecha al final» o el desempate por id.
+  if (porFechaPago) return resultado
+
   // CORRECCIÓN #6: orden diferenciado por estado
   const esPagado = estado === 'pagado'
   resultado.sort((a, b) => {
@@ -137,6 +177,252 @@ export async function obtenerSaldos({
   })
 
   return resultado
+}
+
+// ─── Listado paginado EN EL SERVIDOR ─────────────────────────────────────────
+// Lo usa la pantalla Saldos. A diferencia de obtenerSaldos (que trae hasta `limite` filas y
+// filtra/ordena/pagina en el navegador), acá la base resuelve TODO: filtros, búsqueda, orden y
+// la página pedida, y devuelve además el total exacto. No hay tope de filas.
+
+const SELECT_SALDO_CON_RELACIONES = `
+  *,
+  cliente ( nombre, apellido, apodo, telefono, mail ),
+  presupuesto ( metodo_pago )
+`
+const TAM_PAGINA_DEFAULT = 25
+const TAM_PAGINA_MAX = 200
+/** Tope de clientes que se resuelven por búsqueda de texto (evita URLs gigantes). */
+const MAX_CLIENTES_BUSQUEDA = 500
+const MAX_TOKENS_BUSQUEDA = 5
+const MAX_LARGO_BUSQUEDA = 80
+/** Código de PostgREST: se pidió una página más allá del último registro. */
+const PGRST_RANGO_FUERA_DE_LIMITE = 'PGRST103'
+
+/**
+ * Limpia un término antes de armar un filtro `ilike` dentro de `.or(...)`.
+ * Se eliminan los caracteres con significado en la sintaxis de PostgREST (coma, paréntesis,
+ * comillas, barra invertida, `:`) y los comodines (`*`, `%`, `_`), para que el texto del usuario
+ * nunca pueda alterar la estructura del filtro (inyección de filtros).
+ */
+function limpiarTerminoBusqueda(termino) {
+  return termino.replace(/[,()"'\\%_*:]/g, '').trim()
+}
+
+/**
+ * Traduce el texto libre del usuario a una condición `.or(...)` sobre `saldo`.
+ * El nombre/apellido viven en `cliente`, así que primero se resuelven los id_cliente que
+ * coinciden (cada palabra debe aparecer en nombre O apellido → «ana paz» encuentra a Ana Paz)
+ * y después se filtra `saldo` por esos clientes, o por id_saldo / id_presupuesto exactos.
+ *
+ * @param {string} search
+ * @returns {Promise<{ or: string|null, sinResultados: boolean }>}
+ *   `or: null` = sin búsqueda. `sinResultados: true` = ya se sabe que nada coincide (no se consulta saldo).
+ */
+async function resolverBusqueda(search) {
+  const texto = String(search ?? '').trim().slice(0, MAX_LARGO_BUSQUEDA)
+  if (!texto) return { or: null, sinResultados: false }
+
+  const terminos = texto
+    .toLowerCase()
+    .split(/\s+/)
+    .map(limpiarTerminoBusqueda)
+    .filter(Boolean)
+    .slice(0, MAX_TOKENS_BUSQUEDA)
+
+  const condiciones = []
+
+  if (terminos.length > 0) {
+    let qc = supabase.from('cliente').select('id_cliente').limit(MAX_CLIENTES_BUSQUEDA)
+    // `.or()` encadenado se combina con AND: todas las palabras deben coincidir.
+    for (const t of terminos) qc = qc.or(`nombre.ilike.*${t}*,apellido.ilike.*${t}*`)
+    const { data, error } = await qc
+    if (error) manejarError('obtenerSaldosPagina.buscarClientes', error)
+    const ids = (data ?? []).map((c) => c.id_cliente)
+    if (ids.length >= MAX_CLIENTES_BUSQUEDA) {
+      logger.warn?.('obtenerSaldosPagina: la búsqueda alcanzó el tope de clientes; refiná el texto', {
+        tope: MAX_CLIENTES_BUSQUEDA,
+      })
+    }
+    if (ids.length > 0) condiciones.push(`id_cliente.in.(${ids.join(',')})`)
+  }
+
+  // Ids exactos (int4: hasta 9 dígitos, no desborda ni se interpola texto libre).
+  if (/^\d{1,9}$/.test(texto)) {
+    const n = Number(texto)
+    condiciones.push(`id_saldo.eq.${n}`, `id_presupuesto.eq.${n}`)
+  }
+
+  return condiciones.length
+    ? { or: condiciones.join(','), sinResultados: false }
+    : { or: null, sinResultados: true }
+}
+
+const ESTADOS_CON_DEUDA = Object.freeze(['pendiente', 'parcial'])
+
+/**
+ * Filtros por columnas de `saldo` (compartidos por la consulta de datos y la de conteo).
+ * `estado` (uno) tiene prioridad; `estados` (lista) se usa para el tramo «con deuda» de Todos.
+ */
+function aplicarFiltrosSaldo(q, { estado, estados, fechaPagoDesde, fechaPagoHasta, busquedaOr }) {
+  if (estado) q = q.eq('estado', estado)
+  else if (estados?.length) q = q.in('estado', estados)
+  // Fecha de pago: columna `date` → texto ISO, sin huso. gte/lte incluyen ambos extremos
+  // y descartan los NULL (Escenarios 4, 5 y 8).
+  if (fechaPagoDesde) q = q.gte('fecha_pago', fechaPagoDesde)
+  if (fechaPagoHasta) q = q.lte('fecha_pago', fechaPagoHasta)
+  if (busquedaOr) q = q.or(busquedaOr)
+  return q
+}
+
+/**
+ * ORDER BY determinista (siempre termina en id_saldo → las páginas no se solapan ni saltean filas).
+ *  · fechaPago: NULLS LAST en ambas direcciones (Escenario 9).
+ *  · «pagado» (vencimiento): id_saldo DESC (más reciente primero), igual que antes.
+ *  · «Todos» + urgencia no pasa por acá: lo resuelve obtenerPaginaTodosPorUrgencia (dos tramos).
+ *  · resto: fecha_vto; en ascendente los sin vencimiento van primero y en descendente al final,
+ *    replicando el criterio histórico del listado.
+ */
+function aplicarOrdenSaldo(q, { estado, ordenPor, orden }) {
+  const asc = orden !== 'desc'
+  if (ordenPor === CAMPO_FECHA_PAGO) {
+    return q
+      .order('fecha_pago', { ascending: asc, nullsFirst: false })
+      .order('id_saldo', { ascending: false })
+  }
+  if (estado === 'pagado') return q.order('id_saldo', { ascending: false })
+  return q
+    .order('fecha_vto', { ascending: asc, nullsFirst: asc })
+    .order('id_saldo', { ascending: false })
+}
+
+/**
+ * «Todos» ordenado por urgencia: la deuda activa (pendiente + parcial) va SIEMPRE primero, por
+ * vencimiento en la dirección pedida; los cobrados van al final, del pago más reciente al más
+ * antiguo. Sin esto, los cobrados (con vencimientos viejos) aparecían como «los más urgentes».
+ *
+ * La base no puede ordenar por «tiene deuda» sin una columna extra, así que el listado se arma con
+ * DOS TRAMOS contiguos y se pagina sobre su concatenación:
+ *   [ tramo A: con deuda (nA filas) ][ tramo B: cobrados (nB filas) ]
+ * Se cuentan ambos (HEAD, sin traer filas) y, según la ventana [desde, hasta] pedida, se consulta
+ * solo lo necesario de cada tramo: una página casi nunca toca más de un tramo.
+ *
+ * @returns {Promise<{ data: object[], count: number }>}
+ */
+async function obtenerPaginaTodosPorUrgencia({ filtros, orden, desde, tamanio }) {
+  const hasta = desde + tamanio - 1
+  const filtrosBase = { ...filtros, estado: null }
+  const filtrosDeuda = { ...filtrosBase, estados: ESTADOS_CON_DEUDA }
+  const filtrosCobrados = { ...filtrosBase, estados: ['pagado'] }
+
+  const contar = (f) => aplicarFiltrosSaldo(
+    supabase.from('saldo').select('id_saldo', { count: 'exact', head: true }), f,
+  )
+  const [conteoA, conteoB] = await Promise.all([contar(filtrosDeuda), contar(filtrosCobrados)])
+  if (conteoA.error) manejarError('obtenerSaldosPagina.conteoDeuda', conteoA.error)
+  if (conteoB.error) manejarError('obtenerSaldosPagina.conteoCobrados', conteoB.error)
+  const nA = conteoA.count ?? 0
+  const nB = conteoB.count ?? 0
+
+  const pedirTramo = async (f, ordenTramo, i, j) => {
+    let q = supabase.from('saldo').select(SELECT_SALDO_CON_RELACIONES)
+    q = aplicarFiltrosSaldo(q, f)
+    q = aplicarOrdenSaldo(q, ordenTramo)
+    const { data, error } = await q.range(i, j)
+    if (error) manejarError('obtenerSaldosPagina.tramo', error)
+    return data ?? []
+  }
+
+  const consultas = []
+  // Tramo A: posiciones [0, nA-1] de la lista completa.
+  if (desde < nA) {
+    consultas.push(pedirTramo(
+      filtrosDeuda, { estado: null, ordenPor: 'vencimiento', orden }, desde, Math.min(hasta, nA - 1),
+    ))
+  }
+  // Tramo B: posiciones [nA, nA+nB-1]; se traduce la ventana a índices propios del tramo.
+  const inicioB = Math.max(desde - nA, 0)
+  if (hasta >= nA && inicioB < nB) {
+    consultas.push(pedirTramo(
+      filtrosCobrados, { estado: null, ordenPor: CAMPO_FECHA_PAGO, orden: 'desc' }, inicioB, hasta - nA,
+    ))
+  }
+
+  const tramos = await Promise.all(consultas)
+  return { data: tramos.flat().map(mapSaldo), count: nA + nB }
+}
+
+/**
+ * Una página del listado de Saldos, resuelta por completo en la base.
+ *
+ * @param {object}  [p]
+ * @param {string|null} [p.estado]          'pendiente' | 'parcial' | 'pagado' | null (todos)
+ * @param {string}  [p.search]              Texto libre: nombre, apellido, nombre completo, id_saldo o id_presupuesto exactos.
+ * @param {string|null} [p.fechaPagoDesde]  AAAA-MM-DD (inclusive). Opcional.
+ * @param {string|null} [p.fechaPagoHasta]  AAAA-MM-DD (inclusive). Opcional.
+ * @param {'vencimiento'|'fechaPago'} [p.ordenPor]
+ * @param {'asc'|'desc'} [p.orden]
+ * @param {number}  [p.page]                1-based.
+ * @param {number}  [p.pageSize]            1..200.
+ * @returns {Promise<{ data: object[], count: number }>} `count` = total exacto con los filtros aplicados.
+ * @throws {Error} Rango de fechas inválido (antes de consultar) o error de base (mensaje seguro).
+ */
+export async function obtenerSaldosPagina({
+  estado = null,
+  search = '',
+  fechaPagoDesde = null,
+  fechaPagoHasta = null,
+  ordenPor = 'vencimiento',
+  orden = 'asc',
+  page = 1,
+  pageSize = TAM_PAGINA_DEFAULT,
+} = {}) {
+  const pagoDesde = fechaPagoDesde || null
+  const pagoHasta = fechaPagoHasta || null
+  const errorRango = validarRangoFechaPago(pagoDesde, pagoHasta)
+  if (errorRango) throw new Error(errorRango)
+
+  const tamanio = Math.min(Math.max(Math.floor(Number(pageSize)) || TAM_PAGINA_DEFAULT, 1), TAM_PAGINA_MAX)
+  const pagina = Math.max(Math.floor(Number(page)) || 1, 1)
+  const desde = (pagina - 1) * tamanio
+
+  const busqueda = await resolverBusqueda(search)
+  if (busqueda.sinResultados) return { data: [], count: 0 }
+
+  const filtros = {
+    estado,
+    fechaPagoDesde: pagoDesde,
+    fechaPagoHasta: pagoHasta,
+    busquedaOr: busqueda.or,
+  }
+
+  // «Todos» + urgencia: deuda activa primero y cobrados al final (dos tramos, ver la función).
+  if (!estado && ordenPor !== CAMPO_FECHA_PAGO) {
+    return obtenerPaginaTodosPorUrgencia({ filtros, orden, desde, tamanio })
+  }
+
+  let q = supabase.from('saldo').select(SELECT_SALDO_CON_RELACIONES, { count: 'exact' })
+  q = aplicarFiltrosSaldo(q, filtros)
+  q = aplicarOrdenSaldo(q, { estado, ordenPor, orden })
+  q = q.range(desde, desde + tamanio - 1)
+
+  const { data, error, count } = await q
+
+  if (error) {
+    // Página fuera de rango (p. ej. se pagó el último saldo de la última página y se recarga):
+    // no es un fallo. Se informa el total real para que el hook corrija la página.
+    if (error.code === PGRST_RANGO_FUERA_DE_LIMITE) {
+      const qc = aplicarFiltrosSaldo(
+        supabase.from('saldo').select('id_saldo', { count: 'exact', head: true }),
+        filtros,
+      )
+      const { count: total, error: errorConteo } = await qc
+      if (errorConteo) manejarError('obtenerSaldosPagina.conteo', errorConteo)
+      return { data: [], count: total ?? 0 }
+    }
+    manejarError('obtenerSaldosPagina', error)
+  }
+
+  return { data: (data ?? []).map(mapSaldo), count: count ?? (data ?? []).length }
 }
 
 /**
@@ -202,33 +488,97 @@ export async function obtenerTotalSaldosPendientes() {
   return data.reduce((acc, row) => acc + Number(row.monto_pendiente), 0)
 }
 
+const KPIS_VACIOS = Object.freeze({
+  totalPendiente: 0,
+  cantPendientes: 0,
+  vencidos:       0,
+  cantVencidos:   0,
+  totalCobrado:   0,
+  cantParciales:  0,
+  totalEnParcial: 0,
+})
+
+/** PostgREST limita cada respuesta (1000 filas por defecto): se lee por lotes de ese tamaño. */
+const TAM_LOTE_KPIS = 1000
+/** Tope de seguridad (50.000 saldos): evita un bucle sin fin ante un fallo inesperado. */
+const MAX_LOTES_KPIS = 50
+
 /**
- * CORRECCIÓN #3 + #8: KPIs del dashboard de Saldos, ahora contemplando
- * pagos parciales. `totalCobrado` ya no asume "todo o nada": suma lo
- * efectivamente cobrado en CADA saldo (monto - monto_pendiente), así un
- * saldo con pago parcial aporta al total cobrado aunque siga figurando
- * como deuda pendiente por su remanente.
+ * Trae TODAS las filas que cumplen los filtros, por lotes con orden estable (id_saldo), para que
+ * los KPIs no se trunquen silenciosamente al llegar al tope de filas por respuesta.
  */
-export async function obtenerKPIsSaldos() {
-  const { data, error } = await supabase
-    .from('saldo')
-    .select('monto, monto_pendiente, estado, fecha_vto')
+async function leerFilasParaKpis(filtros) {
+  const filas = []
+  for (let lote = 0; lote < MAX_LOTES_KPIS; lote++) {
+    const desde = lote * TAM_LOTE_KPIS
+    let q = supabase.from('saldo').select('monto, monto_pendiente, estado, fecha_vto')
+    q = aplicarFiltrosSaldo(q, filtros)
+    const { data, error } = await q
+      .order('id_saldo', { ascending: true })
+      .range(desde, desde + TAM_LOTE_KPIS - 1)
+    if (error) {
+      // Un total múltiplo exacto del lote deja el lote siguiente fuera de rango: no es un fallo.
+      if (error.code === PGRST_RANGO_FUERA_DE_LIMITE) break
+      manejarError('obtenerKPIsSaldos', error)
+    }
+    filas.push(...(data ?? []))
+    if ((data ?? []).length < TAM_LOTE_KPIS) break
+  }
+  return filas
+}
 
-  if (error) manejarError('obtenerKPIsSaldos', error)
+/**
+ * KPIs de la pantalla de Saldos, calculados sobre el MISMO conjunto que muestra el listado: acepta
+ * los mismos filtros que `obtenerSaldosPagina` (estado, búsqueda y rango de fecha de pago), así
+ * cifras y tabla nunca discrepan. Sin filtros equivale al total global.
+ *
+ * CORRECCIÓN #8 (pagos parciales): `totalCobrado` suma lo efectivamente cobrado en CADA saldo
+ * (monto - monto_pendiente), por lo que un saldo con pago parcial aporta aunque siga con deuda.
+ *
+ * @param {object} [p]
+ * @param {string|null} [p.estado]          'pendiente' | 'parcial' | 'pagado' | null (todos)
+ * @param {string}      [p.search]          Mismo texto libre que el listado.
+ * @param {string|null} [p.fechaPagoDesde]  AAAA-MM-DD (inclusive). Opcional.
+ * @param {string|null} [p.fechaPagoHasta]  AAAA-MM-DD (inclusive). Opcional.
+ * @throws {Error} Rango de fechas inválido (antes de consultar) o error de base (mensaje seguro).
+ */
+export async function obtenerKPIsSaldos({
+  estado = null,
+  search = '',
+  fechaPagoDesde = null,
+  fechaPagoHasta = null,
+} = {}) {
+  const pagoDesde = fechaPagoDesde || null
+  const pagoHasta = fechaPagoHasta || null
+  const errorRango = validarRangoFechaPago(pagoDesde, pagoHasta)
+  if (errorRango) throw new Error(errorRango)
 
-  const hoy       = new Date().toISOString().split('T')[0]
+  const busqueda = await resolverBusqueda(search)
+  if (busqueda.sinResultados) return { ...KPIS_VACIOS }
+
+  const data = await leerFilasParaKpis({
+    estado,
+    fechaPagoDesde: pagoDesde,
+    fechaPagoHasta: pagoHasta,
+    busquedaOr: busqueda.or,
+  })
+
+  // Mismo criterio que mapSaldo: sin columna migrada, el pendiente cae al monto original.
+  const pendienteDe = (s) => (s.monto_pendiente != null ? Number(s.monto_pendiente) : Number(s.monto))
+
+  const hoy       = hoyISO()
   const conDeuda  = data.filter(s => s.estado === 'pendiente' || s.estado === 'parcial')
-  const vencidos  = conDeuda.filter(s => (s.fecha_vto ?? '') < hoy)
+  const vencidos  = conDeuda.filter(s => s.fecha_vto != null && s.fecha_vto < hoy)
   const parciales = data.filter(s => s.estado === 'parcial')
 
   return {
-    totalPendiente: conDeuda.reduce((a, s) => a + Number(s.monto_pendiente), 0),
+    totalPendiente: conDeuda.reduce((a, s) => a + pendienteDe(s), 0),
     cantPendientes: conDeuda.length,
-    vencidos:       vencidos.reduce((a, s) => a + Number(s.monto_pendiente), 0),
+    vencidos:       vencidos.reduce((a, s) => a + pendienteDe(s), 0),
     cantVencidos:   vencidos.length,
-    totalCobrado:   data.reduce((a, s) => a + (Number(s.monto) - Number(s.monto_pendiente)), 0),
+    totalCobrado:   data.reduce((a, s) => a + (Number(s.monto) - pendienteDe(s)), 0),
     cantParciales:  parciales.length,
-    totalEnParcial: parciales.reduce((a, s) => a + Number(s.monto_pendiente), 0),
+    totalEnParcial: parciales.reduce((a, s) => a + pendienteDe(s), 0),
   }
 }
 
@@ -425,8 +775,7 @@ export async function actualizarSaldo(idSaldo, { monto, fechaVto }) {
  */
 
 /**
- * Revierte el pago de un saldo de forma ATÓMICA (RPC `fn_revertir_pago_saldo`,
- * ver sql/2026_revertir_pago_saldo.sql):
+ * Revierte el pago de un saldo de forma ATÓMICA (RPC `fn_revertir_pago_saldo`):
  *
  *   · el saldo vuelve a 'pendiente' por su monto ORIGINAL completo, sin fecha
  *     de pago,
@@ -495,7 +844,7 @@ export async function revertirPagoSaldo(idSaldo) {
 
 /**
  * Elimina un saldo de forma ATÓMICA y consistente (RPC
- * `fn_eliminar_saldo_con_reversion`, ver sql/2026_eliminar_saldo_con_reversion.sql):
+ * `fn_eliminar_saldo_con_reversion`):
  *
  *   · borra los cobros imputados al saldo (dejan de contarse en Estadísticas
  *     y en el PDF de Facturación),

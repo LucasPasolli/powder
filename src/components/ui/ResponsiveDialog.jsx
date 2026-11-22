@@ -35,11 +35,12 @@ const FOCUSABLE =
  * @param {React.ReactNode} [props.toolbar]
  * @param {React.ReactNode} [props.footer]
  * @param {boolean} [props.busy]  Marca el cuerpo como `aria-busy`.
+ * @param {string} [props.widthClass]  Ancho máximo en escritorio (por defecto `min-[1025px]:max-w-3xl`).
  * @param {React.ReactNode} props.children
  */
 export default function ResponsiveDialog({
   open, onClose, title, subtitle, icon: Icon, iconClassName = 'text-brand-500',
-  bodyRef, toolbar, footer, busy = false, children,
+  bodyRef, toolbar, footer, busy = false, widthClass = 'min-[1025px]:max-w-3xl', children,
 }) {
   const titleId = useId()
   const panelRef = useRef(null)
@@ -79,7 +80,7 @@ export default function ResponsiveDialog({
       document.removeEventListener('keydown', onKeyDown)
       body.style.overflow = overflowPrevio
       body.style.paddingRight = paddingPrevio
-      if (previo && typeof previo.focus === 'function') previo.focus()
+      if (previo && typeof previo.focus === 'function') previo.focus({ preventScroll: true })
     }
   }, [open])
 
@@ -97,11 +98,11 @@ export default function ResponsiveDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="relative flex flex-col w-full h-[100dvh] bg-surface-900 outline-none animate-slide-up
+        className={`relative flex flex-col w-full h-[100dvh] bg-surface-900 outline-none animate-slide-up
                    pt-[env(safe-area-inset-top)]
-                   min-[1025px]:h-auto min-[1025px]:max-h-[90vh] min-[1025px]:max-w-3xl min-[1025px]:pt-0
+                   min-[1025px]:h-auto min-[1025px]:max-h-[90vh] ${widthClass} min-[1025px]:pt-0
                    min-[1025px]:bg-surface-800 min-[1025px]:border min-[1025px]:border-surface-700
-                   min-[1025px]:rounded-2xl min-[1025px]:shadow-2xl"
+                   min-[1025px]:rounded-2xl min-[1025px]:shadow-2xl`}
       >
         <header className="flex items-start justify-between gap-3 px-4 sm:px-6 border-b border-surface-700 flex-shrink-0">
           <div className="min-w-0 py-3 min-[1025px]:py-4">

@@ -62,11 +62,17 @@ function abrirSelectorSiHayMouse(input) {
  * @param {boolean}  [props.etiquetaArriba=false] Rótulo en MAYÚSCULAS sobre el campo (igual que
  *                                               <Input>/<Select>); el campo muestra solo ícono + valor.
  *                                               Lo usa el panel de filtros móvil. Por defecto, sin cambios.
+ * @param {boolean}  [props.compacto=false]      Versión angosta para barras de filtros con poco ancho: el rótulo
+ *                                               deja de verse dentro del campo (queda para lectores de pantalla,
+ *                                               vía <label> sr-only) y, mientras el campo está vacío, hace de
+ *                                               placeholder («Desde», «Hasta»). Sin ancho mínimo propio.
+ *                                               Por defecto, sin cambios.
  * @param {string}   [props.className]           Clases del contenedor (ancho, márgenes).
  * Resto de props (`min`, `max`, `required`, `name`, `id`, `aria-describedby`…) van al <input>.
  */
 export default function DateField({
-  label, value, onChange, clearable = true, disabled = false, id, className = '', etiquetaArriba = false, ...rest
+  label, value, onChange, clearable = true, disabled = false, id, className = '', etiquetaArriba = false,
+  compacto = false, ...rest
 }) {
   const autoId = useId()
   const inputId = id ?? autoId
@@ -88,7 +94,7 @@ export default function DateField({
         <label htmlFor={inputId} className={CLASE_ETIQUETA}>{label}</label>
       )}
       <div
-        className={`flex items-center w-full min-w-0 max-w-full ${ALTO_CONTROL} ${etiquetaArriba ? '' : 'sm:min-w-[12rem]'}
+        className={`flex items-center w-full min-w-0 max-w-full ${ALTO_CONTROL} ${etiquetaArriba || compacto ? '' : 'sm:min-w-[12rem]'}
                     bg-surface-700 border border-surface-600 rounded-xl transition-colors
                     focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500/30
                     ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -97,7 +103,8 @@ export default function DateField({
         <div className={`relative flex flex-1 min-w-0 items-center gap-2 h-full px-3`}>
           <Calendar size={16} aria-hidden="true" className="shrink-0 text-surface-300" />
           {!etiquetaArriba && (
-            <label htmlFor={inputId} className="shrink-0 font-body text-base sm:text-sm text-surface-300">
+            <label htmlFor={inputId}
+              className={compacto ? 'sr-only' : 'shrink-0 font-body text-base sm:text-sm text-surface-300'}>
               {label}
             </label>
           )}
@@ -106,7 +113,7 @@ export default function DateField({
             className={`ml-auto truncate font-body tabular-nums text-base sm:text-sm
                         ${tieneValor ? 'text-white' : 'text-surface-400'}`}
           >
-            {tieneValor ? texto : PLACEHOLDER_FECHA}
+            {tieneValor ? texto : (compacto ? label : PLACEHOLDER_FECHA)}
           </span>
 
           <input

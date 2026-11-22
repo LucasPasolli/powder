@@ -70,21 +70,26 @@ export function CampoBusqueda({
  * @param {string} props.value
  * @param {(valor: string) => void} props.onChange
  * @param {Array<{ value: string, label: string, cantidad: number | null }>} props.opciones
+ * @param {boolean} [props.disabled]  Desactiva el control (p. ej. dato no disponible). Se explica con `ayuda`.
+ * @param {string} [props.ayuda]      Texto corto visible bajo el campo (asociado por aria-describedby).
  * @param {string} [props.className]
  */
-export function CampoSelect({ etiqueta, value, onChange, opciones, className = '' }) {
+export function CampoSelect({ etiqueta, value, onChange, opciones, disabled = false, ayuda, className = '' }) {
   const id = useId()
+  const ayudaId = `${id}-ayuda`
   return (
     <div className={`min-w-0 ${className}`}>
       <label htmlFor={id} className={`${CLASE_ETIQUETA} mb-1`}>{etiqueta}</label>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)}
-        className={`${CAJA} px-3 cursor-pointer`}>
+        disabled={disabled} aria-describedby={ayuda ? ayudaId : undefined}
+        className={`${CAJA} px-3 ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}>
         {opciones.map((o) => (
           <option key={o.value} value={o.value} className="font-body">
             {o.cantidad == null ? o.label : `${o.label} (${o.cantidad})`}
           </option>
         ))}
       </select>
+      {ayuda && <p id={ayudaId} className="mt-1 text-xs text-surface-500 font-body">{ayuda}</p>}
     </div>
   )
 }

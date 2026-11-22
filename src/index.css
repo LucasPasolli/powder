@@ -46,6 +46,11 @@
   .animate-slide-up {
     animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
+
+  /* Menú de acciones (MenuAcciones): popover en desktop, bottom sheet en mobile/tablet. */
+  .animate-menu-in  { animation: menuIn 0.15s ease-out both; }
+  .animate-sheet-in { animation: sheetIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .animate-scrim-in { animation: fadeIn 0.15s ease both; }
 }
 
 @keyframes fadeIn {
@@ -56,6 +61,16 @@
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(24px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes menuIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes sheetIn {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
 }
 
 /* Animación de error del login (movida desde un <style> inline para poder
@@ -74,5 +89,12 @@
 
 /* Accesibilidad (WCAG 2.3.3): respetar "reducir movimiento". */
 @media (prefers-reduced-motion: reduce) {
-  .animate-shake, .animate-slide-up, .animate-fade-in { animation: none !important; opacity: 1; }
+  .animate-shake, .animate-slide-up, .animate-fade-in,
+  .animate-menu-in, .animate-sheet-in, .animate-scrim-in { animation: none !important; opacity: 1; }
+}
+
+/* Escenario 8 (notas): la sección de notas nunca se imprime. Refuerza `print:hidden`
+   por si la build de Tailwind no incluye la variante `print`. */
+@media print {
+  [data-no-print] { display: none !important; }
 }

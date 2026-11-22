@@ -6,18 +6,20 @@ import { useScrollAnchor } from '../hooks/useScrollToTopOnChange'
 import { useScrollToTopOnView } from '../hooks/useScrollToTopOnView'
 import { supabase } from '../lib/supabase'
 import { Card, PageHeader, Button, Badge, Modal, Input } from '../components/ui'
+import NotasRegistro from '../components/notas/NotasRegistro'
 import {
   Plus, Trash2, Search, CheckCircle2, AlertCircle,
   ArrowLeft, ShoppingCart, Package, Clock, BadgeCheck,
-  Pencil, Truck, RotateCcw, UserPlus, Building2, CalendarCheck,
+  Pencil, RotateCcw, UserPlus, Building2, CalendarCheck,
   Layers, Landmark, Lock, Loader2, WifiOff,
+  ReceiptText, PackageCheck, ArrowLeftRight,
+  ClipboardList, X,
 } from 'lucide-react'
 import {
   obtenerPedidos,
   obtenerPedidoPorId,
   obtenerDetallesDePedido,
   marcarPedidoPagado,
-  recibirPedido,
 } from '../services/pedidosService'
 import {
   validarPlanCuotas,
@@ -45,6 +47,19 @@ import KpiCard from '../components/ui/KpiCard'
 import { CuotasPlanDetalle, ItemsPedidoDetalle } from '../components/pedidos/PedidoDetalleListas'
 import { TOUCH, ESTADO_CONFIG, cap, fmt, fmtFecha, metodoPagoLabel } from '../components/pedidos/pedidosPresentacion'
 import { obtenerTieneMedidasPorProductos } from '../services/productosService'
+// Flujo Original → Facturado → Recibido (factura, recepción y comparación).
+import FacturaPedidoForm from '../components/pedidos/FacturaPedidoForm'
+import RecepcionPedidoForm from '../components/pedidos/RecepcionPedidoForm'
+import ComparacionPedidoDialog from '../components/pedidos/ComparacionPedidoDialog'
+import { EtapasPedido } from '../components/pedidos/flujoUi'
+// Encargos de cliente: crear (Task 1) y añadir a un pedido / cancelar (Task 2).
+import EncargosVista from '../components/encargos/EncargosVista'
+import SelectorEncargosPedido from '../components/encargos/SelectorEncargosPedido'
+import { useEncargosPendientes } from '../hooks/useEncargosPendientes'
+import { agregarEncargoAItems, quitarEncargoDeItems, nombreCompletoCliente, LIMITE_ENCARGOS_POR_PEDIDO } from '../lib/encargos'
+import {
+  ESTADO, esAnteriorAlFlujo, puedeEditarLineas, puedeRegistrarFactura, puedeRegistrarRecepcion, puedeVerComparacion,
+} from '../lib/pedidoFlujo'
 import {
   MEDIDAS_VALIDAS, MODO_MEDIDAS, modoMedidaDeItem, medidaParaEnvio,
   pedidoEstaCerrado, validarMedidasItems, lineaSeEnvia,
@@ -659,11 +674,11 @@ function ItemRow({ item, index, onUpdate, onRemove, disabled = false, isDesktop 
 
 // ─── Vista detalle de un pedido ─────────────────────────────────────────────
 
-function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
+function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar, onFacturar, onRecibir }) {
   const [pedido,        setPedido]        = useState(pedidoInit)
   const [detalles,      setDetalles]      = useState([])
   const [confirmPagar,  setConfirmPagar]  = useState(false)
-  const [confirmEstado, setConfirmEstado] = useState(null) // 'recibido'
+  const [verComparacion, setVerComparacion] = useState(false)
   const [proveedor,     setProveedor]     = useState(null)
   const [loading,       setLoading]       = useState(false)
   const [cuotas,        setCuotas]        = useState([])
@@ -777,26 +792,10 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
     }
   }
 
-  async function cambiarEstadoLogistico(nuevoEstado) {
-    setLoading(true)
-    try {
-      const fechaRecepcion = nuevoEstado === 'recibido' ? today() : null
-      if (nuevoEstado === 'recibido') {
-        await recibirPedido(pedido.idPedido, fechaRecepcion)
-      }
-      setConfirmEstado(null)
-      await reload()
-      onUpdated()
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   const esPendientePago   = pedido.estadoPago === 'pendiente'
-  const estadoLog         = pedido.estadoLogistico ?? 'encargado'
-  const cfg               = ESTADO_CONFIG[estadoLog] ?? ESTADO_CONFIG.encargado
+  const estadoLog         = pedido.estadoLogistico ?? ESTADO.ORIGINAL
+  const cfg               = ESTADO_CONFIG[estadoLog] ?? ESTADO_CONFIG.original
+  const anteriorAlFlujo   = esAnteriorAlFlujo(pedido)
   const esEcheck          = pedido.metodoPago === 'echeck'
   const dia30             = fechaVencimientoEcheck(pedido.fecha)
 
@@ -814,7 +813,7 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
             Pedido <span className="text-brand-400 font-mono">#{pedido.idPedido}</span>
           </span>
         </div>
-        {estadoLog === 'encargado' && (
+        {puedeEditarLineas(pedido) && (
           <Button size="sm" variant="secondary" icon={Pencil} onClick={onEditar} className={TOUCH}>
             Editar
           </Button>
@@ -832,12 +831,14 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
             <Badge color={cfg.color}>
               <cfg.icon size={11} className="inline mr-1" />{cfg.label}
             </Badge>
+            {anteriorAlFlujo && <Badge color="gray">Pedido anterior al nuevo flujo</Badge>}
             <Badge color={esPendientePago ? 'yellow' : 'green'}>
               {esPendientePago ? <Clock size={11} className="inline mr-1" /> : <CheckCircle2 size={11} className="inline mr-1" />}
               {esPendientePago ? 'Pago pendiente' : 'Pagado'}
             </Badge>
           </div>
         </div>
+        <div className="mt-4"><EtapasPedido estado={estadoLog} /></div>
         {/* Aviso echeck */}
         {esEcheck && (
           <div className="mt-4 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex items-start gap-3">
@@ -861,6 +862,12 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
             <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body mb-1">Fecha pedido</p>
             <p className="text-white text-sm font-mono">{fmtFecha(pedido.fecha)}</p>
           </div>
+          {pedido.fechaFacturacion && (
+            <div className="bg-surface-700 rounded-xl p-4">
+              <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body mb-1">Fecha facturación</p>
+              <p className="text-white text-sm font-mono">{fmtFecha(pedido.fechaFacturacion)}</p>
+            </div>
+          )}
           {pedido.fechaRecepcion && (
             <div className="bg-surface-700 rounded-xl p-4">
               <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body mb-1">Fecha recepción</p>
@@ -888,17 +895,32 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
           <div className="bg-surface-700 rounded-xl p-4">
             <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body mb-1">Total</p>
             <p className="text-brand-400 font-mono font-bold text-lg">{fmt(pedido.monto)}</p>
+            {pedido.montoOriginal != null && pedido.montoOriginal !== pedido.monto && (
+              <p className="text-surface-400 text-sm min-[1025px]:text-xs font-mono mt-1">Original: {fmt(pedido.montoOriginal)}</p>
+            )}
           </div>
         </div>
-        {/* Acciones de estado */}
-        {(estadoLog === 'encargado' || (esPendientePago && !pedido.tieneCuotas)) && (
+        {/* Acciones del flujo: Original → Facturado → Recibido */}
+        {(puedeRegistrarFactura(pedido) || puedeRegistrarRecepcion(pedido) || puedeVerComparacion(pedido) || (esPendientePago && !pedido.tieneCuotas)) && (
           <div className="mt-6 pt-5 border-t border-surface-700">
-            <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body mb-3">Cambiar estado</p>
+            <p className="text-surface-400 text-sm min-[1025px]:text-xs uppercase tracking-widest font-body mb-3">Acciones</p>
             <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
-              {estadoLog === 'encargado' && (
-                <Button size="sm" icon={Truck} onClick={() => setConfirmEstado('recibido')}
+              {puedeRegistrarFactura(pedido) && (
+                <Button size="sm" icon={ReceiptText} onClick={onFacturar}
                   className={`${TOUCH} w-full sm:w-auto bg-brand-600 hover:bg-brand-500 border-brand-500 text-white`}>
-                  Marcar Recibido
+                  Registrar factura
+                </Button>
+              )}
+              {puedeRegistrarRecepcion(pedido) && (
+                <Button size="sm" icon={PackageCheck} onClick={onRecibir}
+                  className={`${TOUCH} w-full sm:w-auto bg-brand-600 hover:bg-brand-500 border-brand-500 text-white`}>
+                  Registrar recepción
+                </Button>
+              )}
+              {puedeVerComparacion(pedido) && (
+                <Button size="sm" variant="secondary" icon={ArrowLeftRight} onClick={() => setVerComparacion(true)}
+                  className={`${TOUCH} w-full sm:w-auto`}>
+                  Comparar original vs facturado
                 </Button>
               )}
               {esPendientePago && !pedido.tieneCuotas && (
@@ -987,6 +1009,10 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
         </div>
       </Card>
 
+      {/* Notas al pie del detalle (Escenario 1): debajo de todo el contenido actual.
+          Independiente del estado del registro (Escenario 7) y excluida de PDF/impresión (Escenario 8). */}
+      <NotasRegistro tipo="pedido_compra" idRegistro={pedido.idPedido} />
+
       {/* Modal confirmar pago */}
       <Modal open={confirmPagar} onClose={() => setConfirmPagar(false)} title="Confirmar pago" width="max-w-sm">
         <p className="text-surface-300 text-sm font-body mb-2">
@@ -1003,39 +1029,10 @@ function PedidoDetalle({ pedido: pedidoInit, onBack, onUpdated, onEditar }) {
         </div>
       </Modal>
 
-      {/* Modal cambio de estado logístico */}
-      <Modal open={!!confirmEstado} onClose={() => setConfirmEstado(null)}
-        title={confirmEstado === 'recibido' ? 'Confirmar recepción' : 'Marcar para revisión'}
-        width="max-w-sm">
-        {confirmEstado === 'recibido' ? (
-          <>
-            <p className="text-surface-300 text-sm font-body mb-2">
-              ¿Confirmar que el pedido <span className="text-white font-mono">#{pedido.idPedido}</span> fue recibido correctamente?
-            </p>
-            <p className="text-emerald-400 text-sm min-[1025px]:text-xs font-body mb-6 bg-emerald-500/10 border border-emerald-500/25 rounded-xl px-3 py-2">
-              El stock de todos los productos de este pedido se sumará al Inventario.
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="text-surface-300 text-sm font-body mb-2">
-              ¿Marcar el pedido <span className="text-white font-mono">#{pedido.idPedido}</span> para revisión?
-            </p>
-            <p className="text-yellow-400 text-sm min-[1025px]:text-xs font-body mb-6 bg-yellow-500/10 border border-yellow-500/25 rounded-xl px-3 py-2">
-              El stock NO se actualizará hasta que el pedido sea marcado como Recibido.
-            </p>
-          </>
-        )}
-        <div className="flex flex-col-reverse sm:flex-row gap-2">
-          <Button variant="secondary" className={`flex-1 ${TOUCH}`} onClick={() => setConfirmEstado(null)}>Cancelar</Button>
-          <Button className={`flex-1 ${TOUCH}`}
-            icon={confirmEstado === 'recibido' ? CheckCircle2 : AlertCircle}
-            onClick={() => cambiarEstadoLogistico(confirmEstado)}
-            disabled={loading}>
-            {loading ? 'Procesando...' : 'Confirmar'}
-          </Button>
-        </div>
-      </Modal>
+      {/* Comparación original vs facturado (sólo en Facturado/Recibido) */}
+      {puedeVerComparacion(pedido) && (
+        <ComparacionPedidoDialog open={verComparacion} onClose={() => setVerComparacion(false)} pedido={pedido} />
+      )}
 
       {/* Modal confirmar pago de cuota individual */}
       <Modal open={!!confirmCuota} onClose={() => setConfirmCuota(null)} title="Confirmar pago de cuota" width="max-w-sm">
@@ -1195,6 +1192,39 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
 
   const dia30 = fechaVencimientoEcheck()
 
+  // ── Encargos de cliente (Task 2) ─────────────────────────────────────────
+  // Sólo en ALTA: añadir encargos incorpora sus productos a las líneas y, al guardar, el servidor
+  // los pasa a «En proceso» vinculados a este pedido en la MISMA transacción.
+  const [encargosAnadidos, setEncargosAnadidos] = useState([])
+  const [mostrarSelectorEncargos, setMostrarSelectorEncargos] = useState(false)
+  const [encargoConProblema, setEncargoConProblema] = useState(null) // id que el servidor rechazó
+  // ItemRow usa key=índice y guarda el texto del producto en estado local: al REEMPLAZAR líneas desde
+  // afuera (añadir/quitar un encargo) se remontan las filas para que muestren los datos nuevos.
+  const [versionLineas, setVersionLineas] = useState(0)
+
+  function anadirEncargos(lista) {
+    setMostrarSelectorEncargos(false)
+    if (!lista.length) return
+    setItems(prev => lista.reduce((acc, enc) => agregarEncargoAItems(acc, enc), prev))
+    setVersionLineas(v => v + 1)
+    setEncargosAnadidos(prev => [...prev, ...lista.filter(e => !prev.some(p => p.idEncargo === e.idEncargo))])
+    setErroresMedida({})
+    setError('')
+    setEncargoConProblema(null)
+    setToast(lista.length === 1 ? 'Encargo añadido al pedido ✓' : `${lista.length} encargos añadidos al pedido ✓`)
+  }
+
+  function quitarEncargo(enc) {
+    setItems(prev => {
+      const sig = quitarEncargoDeItems(prev, enc)
+      return sig.length ? sig : [ITEM_EMPTY()]
+    })
+    setVersionLineas(v => v + 1)
+    setEncargosAnadidos(prev => prev.filter(e => e.idEncargo !== enc.idEncargo))
+    setErroresMedida({})
+    setEncargoConProblema(prev => (prev === enc.idEncargo ? null : prev))
+  }
+
   function updateItem(idx, key, val) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, [key]: val } : it))
     // El error de medida de una línea se limpia apenas el usuario la corrige.
@@ -1311,13 +1341,17 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
         },
         detalles: detallesPayload,
         cuotas:   llevaCuotas ? cuotas : null,
+        // Encargos a vincular (alta). Forma parte de la huella de idempotencia.
+        idsEncargo: esEdicion ? [] : encargosAnadidos.map(e => e.idEncargo),
       }
 
       // UNA llamada, UNA transacción (cabecera + ítems + stock + cuotas).
       const idempotencyKey = idemRef.current.obtener(JSON.stringify(args))
       const guardado = await guardarPedido({ ...args, idempotencyKey })
-      onGuardado(guardado.idPedido)
+      onGuardado(guardado.idPedido, guardado)
     } catch (err) {
+      // El servidor rechazó un encargo (cancelado / ya en otro pedido): se lo marca para que se lo quite.
+      if (err?.code === 'encargo_no_disponible') setEncargoConProblema(Number(err.detalle) || null)
       // Mensaje ya traducido y seguro (GuardadoPedidoError). El formulario
       // conserva todos los datos cargados para poder reintentar.
       setError(err.message || 'Ocurrió un error al guardar el pedido.')
@@ -1358,6 +1392,14 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
   return (
     <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 animate-slide-up">
       {toast && <Toast message={toast} onDone={() => setToast('')} />}
+      {mostrarSelectorEncargos && (
+        <SelectorEncargosPedido
+          onClose={() => setMostrarSelectorEncargos(false)}
+          yaAnadidos={new Set(encargosAnadidos.map(e => e.idEncargo))}
+          cupo={LIMITE_ENCARGOS_POR_PEDIDO - encargosAnadidos.length}
+          onConfirmar={anadirEncargos}
+        />
+      )}
 
       <div className="flex items-center gap-3">
         <button onClick={onCancelar}
@@ -1495,10 +1537,40 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
 
       {/* Productos: grilla en escritorio, tarjetas apiladas en mobile/tablet */}
       <Card className="overflow-visible">
-        <div className="px-4 sm:px-6 py-4 border-b border-surface-700 flex items-center justify-between gap-3">
+        <div className="px-4 sm:px-6 py-4 border-b border-surface-700 flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-body font-semibold text-white text-sm">Productos</h2>
-          <Button size="sm" icon={Plus} onClick={addItem} disabled={hayCuotaPagada || saving} className={TOUCH}>Agregar ítem</Button>
+          <div className="flex flex-col min-[480px]:flex-row gap-2 w-full min-[480px]:w-auto">
+            {!esEdicion && (
+              <Button size="sm" variant="secondary" icon={ClipboardList} onClick={() => setMostrarSelectorEncargos(true)}
+                disabled={saving || encargosAnadidos.length >= LIMITE_ENCARGOS_POR_PEDIDO} className={TOUCH}>
+                Añadir Encargo(s)
+              </Button>
+            )}
+            <Button size="sm" icon={Plus} onClick={addItem} disabled={hayCuotaPagada || saving} className={TOUCH}>Agregar ítem</Button>
+          </div>
         </div>
+        {encargosAnadidos.length > 0 && (
+          <div className="px-4 sm:px-6 py-3 border-b border-surface-700 bg-surface-900/30">
+            <p className="text-surface-300 text-sm min-[1025px]:text-xs font-body mb-2">
+              Encargos incluidos en este pedido: al guardar pasarán a «En proceso».
+            </p>
+            <ul aria-label="Encargos incluidos en el pedido" className="flex flex-wrap gap-2">
+              {encargosAnadidos.map(e => (
+                <li key={e.idEncargo}
+                  className={`flex items-center gap-1 pl-3 rounded-full border text-sm font-body
+                    ${encargoConProblema === e.idEncargo ? 'border-red-500/60 bg-red-500/10 text-red-200' : 'border-brand-500/40 bg-brand-500/10 text-white'}`}>
+                  <span className="py-1 break-words min-w-0">#{e.idEncargo} · {nombreCompletoCliente(e.cliente)}</span>
+                  <button type="button" onClick={() => quitarEncargo(e)} disabled={saving}
+                    aria-label={`Quitar el encargo #${e.idEncargo} del pedido`}
+                    className="flex items-center justify-center min-h-[44px] min-w-[44px] rounded-full text-surface-300 hover:text-white
+                               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 disabled:opacity-40">
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className={isDesktop ? 'overflow-x-auto' : 'p-3'}>
           <div role={isDesktop ? 'table' : 'list'} aria-label="Productos del pedido"
             className={isDesktop ? 'min-w-[56rem]' : 'space-y-3'}>
@@ -1511,7 +1583,7 @@ function NuevoPedido({ onGuardado, onCancelar, pedidoEditando }) {
               </div>
             )}
             {items.map((item, idx) => (
-              <ItemRow key={idx} item={item} index={idx} onUpdate={updateItem} onRemove={removeItem}
+              <ItemRow key={`${versionLineas}-${idx}`} item={item} index={idx} onUpdate={updateItem} onRemove={removeItem}
                 disabled={hayCuotaPagada || saving} isDesktop={isDesktop}
                 errorMedida={erroresMedida[idx] ?? null} pedidoCerrado={pedidoCerrado} />
             ))}
@@ -1579,7 +1651,7 @@ const fmtCompactoARS = (n) =>
 
 export default function PedidosCompra() {
   const [cuotasResumen, setCuotasResumen] = useState({}) // { [idPedido]: { cuotasPendientes, montoPendiente, ... } }
-  const [vista,        setVista]        = useState('lista') // 'lista' | 'nuevo' | 'detalle' | 'editar'
+  const [vista,        setVista]        = useState('lista') // 'lista' | 'nuevo' | 'detalle' | 'editar' | 'facturar' | 'recibir'
   const [selected,     setSelected]     = useState(null)
   // Mobile/tablet: lista / nuevo / detalle / editar se alternan por estado (sin cambiar la URL);
   // cada vista nueva debe arrancar desde el inicio. Va antes de los `return` condicionales.
@@ -1636,6 +1708,12 @@ export default function PedidosCompra() {
   const { isCompact } = useBreakpoint()
   const online = useOnlineStatus()
 
+  // Encargos de cliente: la creación vive dentro del apartado «Encargos» (EncargosVista);
+  // acá sólo se mantiene el contador de pendientes del botón «Encargos».
+  const [refrescoEncargos,     setRefrescoEncargos]     = useState(0)
+  const encargosPendientes = useEncargosPendientes(refrescoEncargos)
+  const refrescarEncargos = useCallback(() => setRefrescoEncargos(n => n + 1), [])
+
   // Deuda pendiente real: para pedidos CC fraccionada, sólo lo que falta
   // cobrar (sum de cuotas no pagadas) — no el monto total del pedido, que
   // no se mueve aunque ya se haya pagado una cuota. Para el resto de los
@@ -1663,11 +1741,14 @@ export default function PedidosCompra() {
   function abrirDetalle(p) { setSelected(p); setVista('detalle') }
   function volverLista()   { setSelected(null); setVista('lista'); load() }
 
-  function handleGuardado(id) {
+  function handleGuardado(id, guardado) {
     const isEdit = vista === 'editar'
-    setToast(isEdit ? `Pedido #${id} actualizado correctamente ✓` : `Pedido #${id} creado correctamente ✓`)
+    const n = guardado?.encargosVinculados ?? 0
+    const sufijo = n > 0 ? ` · ${n} ${n === 1 ? 'encargo pasó' : 'encargos pasaron'} a «En proceso»` : ''
+    setToast((isEdit ? `Pedido #${id} actualizado correctamente ✓` : `Pedido #${id} creado correctamente ✓`) + sufijo)
     setVista('lista')
     load()
+    if (n > 0) refrescarEncargos()
   }
 
   function handleUpdated() {
@@ -1679,11 +1760,51 @@ export default function PedidosCompra() {
     setVista('editar')
   }
 
+  // Tras facturar/recibir se vuelve al detalle (que recarga el pedido) y se refresca el listado.
+  function handleFlujoRegistrado(mensaje) {
+    return (resp) => {
+      setToast(mensaje)
+      setSelected((prev) => ({ ...prev, ...resp, detalles: undefined }))
+      setVista('detalle')
+      load()
+    }
+  }
+
   if (vista === 'nuevo')
     return <NuevoPedido onGuardado={handleGuardado} onCancelar={volverLista} />
 
+  if (vista === 'encargos')
+    return (
+      <>
+        {toast && <Toast message={toast} onDone={() => setToast('')} />}
+        <EncargosVista
+          onVolver={volverLista}
+          onToast={setToast}
+          onCambioEstado={refrescarEncargos}
+        />
+      </>
+    )
+
   if (vista === 'editar' && selected)
     return <NuevoPedido onGuardado={handleGuardado} onCancelar={() => setVista('detalle')} pedidoEditando={selected} />
+
+  if (vista === 'facturar' && selected)
+    return (
+      <FacturaPedidoForm
+        pedido={selected}
+        onCancelar={() => setVista('detalle')}
+        onRegistrado={handleFlujoRegistrado(`Factura del pedido #${selected.idPedido} registrada ✓`)}
+      />
+    )
+
+  if (vista === 'recibir' && selected)
+    return (
+      <RecepcionPedidoForm
+        pedido={selected}
+        onCancelar={() => setVista('detalle')}
+        onRegistrado={handleFlujoRegistrado(`Recepción del pedido #${selected.idPedido} registrada ✓`)}
+      />
+    )
 
   if (vista === 'detalle')
     return (
@@ -1692,6 +1813,8 @@ export default function PedidosCompra() {
         onBack={volverLista}
         onUpdated={handleUpdated}
         onEditar={handleEditar}
+        onFacturar={() => setVista('facturar')}
+        onRecibir={() => setVista('recibir')}
       />
     )
 
@@ -1715,9 +1838,22 @@ export default function PedidosCompra() {
           mobile → botón a ancho completo bajo el título; ≥ sm → a la derecha del encabezado. */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <PageHeader title="Pedidos de Compra" subtitle="Órdenes a proveedores" />
-        <Button icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('nuevo')}>
-          Nuevo Pedido
-        </Button>
+        {/* Mobile: botones apilados a ancho completo (≥ 44 px). ≥ sm: en fila y, si no entran, pasan a la línea siguiente. */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+          {/* Navega al apartado Encargos (no crea nada). Conserva el ícono que tenía «Nuevo encargo»
+              y el contador de pendientes. La alta se hace desde adentro del apartado. */}
+          <Button variant="secondary" icon={ClipboardList} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('encargos')}>
+            Encargos
+            {encargosPendientes > 0 && (
+              <span className="ml-2 inline-flex min-w-[1.5rem] justify-center rounded-full bg-yellow-500/20 border border-yellow-500/40 px-1.5 text-xs text-yellow-300 font-mono">
+                {encargosPendientes}<span className="sr-only"> pendientes</span>
+              </span>
+            )}
+          </Button>
+          <Button icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center" onClick={() => setVista('nuevo')}>
+            Nuevo Pedido
+          </Button>
+        </div>
       </div>
 
       {/* Resumen: mismas tarjetas que Saldos — 2 columnas en mobile (la primera ocupa el ancho

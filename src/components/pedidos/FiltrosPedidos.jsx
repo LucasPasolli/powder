@@ -26,7 +26,7 @@ const DEFAULTS_PANEL = Object.freeze(Object.fromEntries(CAMPOS_PANEL.map((k) => 
 /** Campos del panel móvil (la etiqueta de la opción por defecto es siempre «Todos»). */
 const CAMPOS_MOVIL = [
   { tipo: 'select', clave: 'filterLog', etiqueta: 'Estado logístico', opciones: [
-    { value: 'all', label: 'Todos' }, { value: 'encargado', label: 'Encargado' }, { value: 'recibido', label: 'Recibido' },
+    { value: 'all', label: 'Todos' }, { value: 'original', label: 'Original' }, { value: 'facturado', label: 'Facturado' }, { value: 'recibido', label: 'Recibido' },
   ] },
   { tipo: 'select', clave: 'filterEst', etiqueta: 'Estado de pago', opciones: [
     { value: 'all', label: 'Todos' }, { value: 'pendiente', label: 'Pago pendiente' }, { value: 'pagado', label: 'Pagado' },
@@ -66,7 +66,8 @@ function CamposFiltro({ values, onChange, idBase }) {
         <label htmlFor={`${idBase}-log`} className="sr-only">Estado logístico</label>
         <select id={`${idBase}-log`} value={values.filterLog} onChange={set('filterLog')} className={`${field} cursor-pointer`}>
           <option value="all">Estado logístico</option>
-          <option value="encargado">Encargado</option>
+          <option value="original">Original</option>
+          <option value="facturado">Facturado</option>
           <option value="recibido">Recibido</option>
         </select>
       </div>

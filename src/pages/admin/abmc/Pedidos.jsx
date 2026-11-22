@@ -1,21 +1,21 @@
 // src/pages/admin/abmc/Pedidos.jsx
-// Migrado desde ABMC.jsx sin cambios funcionales (Task 2).
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Button, Input, Select, Modal, Table, Tr, Td, Badge, Card } from '../../../components/ui'
 import DateField from '../../../components/ui/DateField'
 import { useScrollAnchor } from '../../../hooks/useScrollToTopOnChange'
 import { Pencil, Trash2 } from 'lucide-react'
+import { EstadoLogisticoBadge } from '../../../components/pedidos/pedidosPresentacion'
 import { obtenerPedidos, actualizarEstadosPedido, eliminarPedido } from '../../../services/pedidosService'
 import { buscadorClass, PAGE_SIZE, fmt, formatearFecha, normalizarTexto, Pagination, ConfirmModal } from './comunes'
 import { FiltrosGestionMovil, opcionesTodas } from './comunes'
 import { useBreakpoint } from '../../../hooks/useBreakpoint'
+import { useAvisoNotas } from '../../../hooks/useAvisoNotas'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PEDIDOS DE COMPRA
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const EPAGO_COLOR = { pendiente: 'yellow', pagado: 'green' }
-const ELOGISTICO_COLOR = { encargado: 'blue', recibido: 'green' }
 
 // Etiquetas de método de pago de PEDIDOS DE COMPRA (columna `metodo_pago`).
 // Cuenta Corriente se distingue según tenga plan de cuotas o sea pago único
@@ -39,6 +39,8 @@ export default function Pedidos() {
   const [confirm, setConfirm] = useState(null)
   const [search, setSearch] = useState('')
   const { isCompact } = useBreakpoint()
+  // Escenario 11: avisa si el pedido tiene notas que se eliminarán con él.
+  const { aviso: avisoNotas } = useAvisoNotas('pedido_compra', confirm)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(1)
@@ -61,8 +63,8 @@ export default function Pedidos() {
 
   async function save() {
     try {
-      // actualizarEstadosPedido maneja toda la lógica de stock (aplicar/revertir)
-      // según el cambio de estadoLogistico, exactamente como lo hacía el .jsx original.
+      // El estado logístico NO se cambia desde acá (sólo por el flujo Original →
+      // Facturado → Recibido): se reenvía tal cual y el servidor rechaza cualquier cambio.
       await actualizarEstadosPedido(editRow.idPedido, {
         estadoPago:      editRow.estadoPago,
         estadoLogistico: editRow.estadoLogistico,
@@ -78,7 +80,7 @@ export default function Pedidos() {
 
   async function del(id) {
     try {
-      // eliminarPedido revierte stock si estaba recibido
+      // eliminarPedido (= anular) revierte SOLO lo recibido si el pedido estaba recibido
       await eliminarPedido(id)
     } catch (e) {
       console.error(e)
@@ -138,7 +140,7 @@ export default function Pedidos() {
               <Td>{fmt(r.monto)}</Td>
               <Td className="text-surface-400">{pedidoMetodoLabel(r)}</Td>
               <Td><Badge color={EPAGO_COLOR[r.estadoPago] ?? 'gray'}>{r.estadoPago.charAt(0).toUpperCase() + r.estadoPago.slice(1)}</Badge></Td>
-              <Td><Badge color={ELOGISTICO_COLOR[r.estadoLogistico] ?? 'gray'}>{r.estadoLogistico.charAt(0).toUpperCase() + r.estadoLogistico.slice(1)}</Badge></Td>
+              <Td><EstadoLogisticoBadge pedido={r} /></Td>
               <Td>
                 <div className="flex gap-2 justify-end">
                   <Button variant="ghost" size="sm" icon={Pencil} onClick={() => openEdit(r)} />
@@ -161,8 +163,11 @@ export default function Pedidos() {
                 <option value="pendiente">Pendiente</option>
                 <option value="pagado">Pagado</option>
               </Select>
-              <Select label="Estado logístico" value={editRow.estadoLogistico} onChange={fe('estadoLogistico')}>
-                <option value="encargado">Encargado</option>
+              {/* Sólo lectura: la etapa cambia registrando la factura o la recepción en Pedidos de Compra. */}
+              <Select label="Estado logístico" value={editRow.estadoLogistico} onChange={fe('estadoLogistico')} disabled
+                aria-describedby="abmc-estado-log-ayuda">
+                <option value="original">Original</option>
+                <option value="facturado">Facturado</option>
                 <option value="recibido">Recibido</option>
               </Select>
               {editRow.metodoPago === 'cuenta_corriente' ? (
@@ -181,6 +186,9 @@ export default function Pedidos() {
               <Input label="Fecha recepción" type="date" value={editRow.fechaRecepcion || ''} onChange={fe('fechaRecepcion')} />
               <Input label="Fecha pago" type="date" value={editRow.fechaPago || ''} onChange={fe('fechaPago')} />
             </div>
+            <p id="abmc-estado-log-ayuda" className="text-surface-400 text-xs">
+              El estado logístico cambia al registrar la factura o la recepción desde Pedidos de Compra.
+            </p>
             <div className="flex gap-3 pt-3 mt-2 -mx-6 -mb-6 px-6 pb-6 sticky bottom-0 bg-surface-800 border-t border-surface-700/60 sm:static sm:mx-0 sm:mb-0 sm:px-0 sm:pb-0 sm:pt-2 sm:mt-0 sm:border-t-0 sm:bg-transparent">
               <Button variant="secondary" className="flex-1" onClick={() => setModal(false)}>Cancelar</Button>
               <Button className="flex-1" onClick={save}>Guardar</Button>
@@ -197,6 +205,7 @@ export default function Pedidos() {
           ['Monto', fmt(confirmRow.monto)],
         ] : []}
         message="¿Eliminar este pedido y todos sus detalles?"
+        avisos={[avisoNotas]}
       />
     </div>
   )

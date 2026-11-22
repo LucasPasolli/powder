@@ -193,8 +193,7 @@ export function derivarFactorAjustable({ monto, detalles }) {
  * COMPATIBILIDAD CON EL RPC ACTUAL: `crear_presupuesto_idempotente` valida
  * `monto ≈ round(Σ detalle.subtotal × cabecera.factor, 2)`. Con la regla nueva
  * el factor del método ya no es uniforme, así que se envía este factor
- * mezclado, que hace cumplir esa igualdad. Mientras el RPC no se actualice
- * (ver sql/calcular_total_presupuesto.sql) es lo que evita rechazar altas
+ * mezclado, que hace cumplir esa igualdad. Mientras el RPC no se actualice es lo que evita rechazar altas
  * válidas.
  *
  * @param {number} monto

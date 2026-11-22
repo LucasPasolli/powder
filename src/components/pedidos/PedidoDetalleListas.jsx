@@ -125,6 +125,15 @@ export function ItemsPedidoDetalle({ detalles, sel, mobile, desktop }) {
               <dl className="grid grid-cols-1 gap-1 text-sm font-body">
                 <div className="flex justify-between"><dt className="text-surface-400">Cantidad</dt><dd className="text-surface-200 font-mono">{d.cantidad}</dd></div>
                 <div className="flex justify-between"><dt className="text-surface-400">Precio proveedor</dt><dd className="text-surface-200 font-mono">{fmt(d.precioUnitario)}</dd></div>
+                {d.precioConDescuento != null && (
+                  <div className="flex justify-between"><dt className="text-surface-400">Precio con descuento</dt><dd className="text-emerald-400 font-mono">{fmt(d.precioConDescuento)}</dd></div>
+                )}
+                {d.cantidadRecibida != null && (
+                  <div className="flex justify-between">
+                    <dt className="text-surface-400">Recibido</dt>
+                    <dd className={`font-mono ${d.cantidadRecibida === d.cantidad ? 'text-surface-200' : 'text-amber-300'}`}>{d.cantidadRecibida}</dd>
+                  </div>
+                )}
                 <div className="flex justify-between"><dt className="text-surface-400">Subtotal</dt><dd className="text-white font-mono font-semibold">{fmt(d.subtotal)}</dd></div>
               </dl>
             </li>
@@ -134,7 +143,11 @@ export function ItemsPedidoDetalle({ detalles, sel, mobile, desktop }) {
     )
   }
 
-  const cabeceras = ['ID Prod.', 'Producto', 'Medida', 'Cant.', 'Precio Proveedor', 'Subtotal']
+  // Columnas opcionales: sólo aparecen si algún ítem las usa (pedidos migrados no cambian).
+  const hayRecibida = detalles.some((d) => d.cantidadRecibida != null)
+  const hayDescuento = detalles.some((d) => d.precioConDescuento != null)
+  const cabeceras = ['ID Prod.', 'Producto', 'Medida', 'Cant.', ...(hayRecibida ? ['Recibida'] : []),
+    'Precio Proveedor', ...(hayDescuento ? ['Precio c/ desc.'] : []), 'Subtotal']
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm font-body">
@@ -158,7 +171,15 @@ export function ItemsPedidoDetalle({ detalles, sel, mobile, desktop }) {
                   {d.medida ? <Badge color="blue">{d.medida}</Badge> : <span className="text-surface-500 text-xs">—</span>}
                 </td>
                 <td className={`${TD} text-surface-200 font-mono text-center`}>{d.cantidad}</td>
+                {hayRecibida && (
+                  <td className={`${TD} font-mono text-center ${d.cantidadRecibida === d.cantidad ? 'text-surface-200' : 'text-amber-300'}`}>
+                    {d.cantidadRecibida ?? '—'}
+                  </td>
+                )}
                 <td className={`${TD} text-surface-200 font-mono whitespace-nowrap`}>{fmt(d.precioUnitario)}</td>
+                {hayDescuento && (
+                  <td className={`${TD} text-emerald-400 font-mono whitespace-nowrap`}>{d.precioConDescuento != null ? fmt(d.precioConDescuento) : '—'}</td>
+                )}
                 <td className={`${TD} text-surface-200 font-mono font-medium whitespace-nowrap`}>{fmt(d.subtotal)}</td>
               </tr>
             )

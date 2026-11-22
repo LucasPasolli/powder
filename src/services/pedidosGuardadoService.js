@@ -9,12 +9,11 @@
 // Patrón: Transaction Script en el servidor (RPC `guardar_pedido_compra`) +
 // Facade en el cliente. El cliente NUNCA orquesta varias escrituras: una sola
 // llamada, una sola transacción → el número de requests no depende de N ítems.
-//
-// Ver sql/20261024_guardar_pedido_compra.sql.
 
 import { supabase } from '../lib/supabase'
 import { mapPedido, mapDetallePedido } from './pedidosService'
 import { mapCuota } from './pedidosCuotasService'
+import { traducirErrorEncargo } from './encargosService'
 
 /**
  * @typedef {Object} ItemPedidoUI
@@ -34,6 +33,8 @@ import { mapCuota } from './pedidosCuotasService'
  * @property {{metodoPago:string, idProveedor:number, diasVencimientoCC?:number|null}} pedido
  * @property {ItemPedidoUI[]} detalles
  * @property {CuotaDraft[]|null} [cuotas]    alta: plan completo · edición: sólo pendientes
+ * @property {number[]} [idsEncargo]         alta: encargos de cliente a vincular (pasan a «En proceso»
+ *                                            en la MISMA transacción). Vacío/ausente = guardado normal.
  * @property {string} idempotencyKey
  */
 
@@ -99,6 +100,13 @@ export function traducirErrorGuardado(error) {
 
   const fn = MENSAJES[code]
   if (fn) return new GuardadoPedidoError(fn(error?.details ?? undefined), { code, detalle: error?.details })
+
+  // Errores de encargos vinculados (encargo_no_disponible, encargo_inexistente, demasiados_encargos…):
+  // el traductor de encargos ya tiene el texto; se conserva el id en `detalle` para marcar el encargo.
+  const enc = traducirErrorEncargo(error)
+  if (enc.code !== 'desconocido' && enc.code !== 'red') {
+    return new GuardadoPedidoError(enc.message, { code: enc.code, detalle: enc.detalle })
+  }
 
   // Fallas de transporte: la transacción puede o no haberse confirmado. El
   // reintento con la MISMA clave de idempotencia es seguro en ambos casos.
@@ -168,6 +176,19 @@ export function construirArgumentosRpc({ idPedido = null, pedido, detalles, cuot
   }
 }
 
+/** Normaliza los ids de encargo: enteros positivos, sin repetir. Pura. */
+export function normalizarIdsEncargo(ids) {
+  return [...new Set((ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+}
+
+/**
+ * Argumentos del RPC `guardar_pedido_compra_con_encargos`: los mismos del guardado normal
+ * + `p_ids_encargo`. Pura (testeable).
+ */
+export function construirArgumentosRpcConEncargos(params) {
+  return { ...construirArgumentosRpc(params), p_ids_encargo: normalizarIdsEncargo(params.idsEncargo) }
+}
+
 // ─── Escritura ────────────────────────────────────────────────────────────────
 
 /**
@@ -181,7 +202,7 @@ export function construirArgumentosRpc({ idPedido = null, pedido, detalles, cuot
  * Es seguro reintentar con la MISMA `idempotencyKey` (ver crearGestorIdempotencia).
  *
  * @param {GuardarPedidoParams} params
- * @returns {Promise<ReturnType<typeof mapPedido> & {detalles:any[], cambios:{insertados:number,actualizados:number,eliminados:number}, reutilizado:boolean}>}
+ * @returns {Promise<ReturnType<typeof mapPedido> & {detalles:any[], cambios:{insertados:number,actualizados:number,eliminados:number}, reutilizado:boolean, encargosVinculados:number}>}
  * @throws {GuardadoPedidoError} con mensaje seguro para mostrar al usuario.
  */
 export async function guardarPedido(params) {
@@ -189,7 +210,12 @@ export async function guardarPedido(params) {
     throw new GuardadoPedidoError(MSG_GENERICO, { code: 'idempotency_key_requerida' })
   }
 
-  const { data, error } = await supabase.rpc('guardar_pedido_compra', construirArgumentosRpc(params))
+  // Con encargos: el wrapper guarda el pedido Y vincula los encargos («En proceso») en una sola
+  // transacción — o falla todo. Sin encargos: el camino original, sin cambios.
+  const idsEncargo = normalizarIdsEncargo(params.idsEncargo)
+  const { data, error } = idsEncargo.length > 0
+    ? await supabase.rpc('guardar_pedido_compra_con_encargos', construirArgumentosRpcConEncargos(params))
+    : await supabase.rpc('guardar_pedido_compra', construirArgumentosRpc(params))
 
   if (error) {
     // Log técnico sólo en consola del desarrollador (sin datos del pedido).
@@ -202,6 +228,7 @@ export async function guardarPedido(params) {
     detalles:    (data.detalles ?? []).map(mapDetallePedido),
     cambios:     data.cambios ?? { insertados: 0, actualizados: 0, eliminados: 0 },
     reutilizado: Boolean(data.reutilizado),
+    encargosVinculados: Number(data.encargos_vinculados ?? 0),
   }
 }
 

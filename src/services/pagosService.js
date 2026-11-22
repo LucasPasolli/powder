@@ -1,8 +1,7 @@
 // src/services/pagosService.js
 //
 // Motor de Pago Parcial. Toda la lógica de imputación cronológica vive en
-// el servidor (función `fn_aplicar_pago_cliente` en Postgres, ver
-// migration_pago_parcial.sql) para garantizar atomicidad: si dos pagos del
+// el servidor (función `fn_aplicar_pago_cliente` en Postgres) para garantizar atomicidad: si dos pagos del
 // mismo cliente llegan casi al mismo tiempo, la transacción de Postgres con
 // FOR UPDATE evita que se pisen o dupliquen imputaciones.
 //
@@ -11,6 +10,7 @@
 // solo para UX) que replica la misma regla de negocio.
 
 import { supabase } from '../lib/supabase'
+import { hoyISO } from '../lib/fechas'
 import { obtenerSaldosPendientesDeCliente } from './saldosService'
 
 const METODOS_VALIDOS = ['efectivo', 'transferencia', 'cheque', 'otro']
@@ -162,7 +162,7 @@ export async function registrarPagoParcial({
   }
 
   const metodo     = METODOS_VALIDOS.includes(metodoPago) ? metodoPago : 'efectivo'
-  const fechaPago  = fecha ?? new Date().toISOString().slice(0, 10)
+  const fechaPago  = fecha ?? hoyISO()
   const desc       = sanitizarTexto(descripcion, 300)
 
   const { data, error } = await supabase.rpc('fn_aplicar_pago_cliente', {
