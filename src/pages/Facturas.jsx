@@ -16,6 +16,8 @@ import PanelFiltros from '../components/facturas/PanelFiltros'
 import ResumenPeriodo from '../components/facturas/ResumenPeriodo'
 import ListadoFacturas from '../components/facturas/ListadoFacturas'
 import { TOQUE } from '../components/facturas/estilos'
+import PestanasModo, { idPanel, idPestana } from '../components/facturas/PestanasModo'
+import FacturarPorMonto from '../components/facturas/FacturarPorMonto'
 import VolverAlPanel from './admin/VolverAlPanel'
 
 const TITULOS = {
@@ -36,6 +38,8 @@ export default function Facturas() {
   const [activeTab, setActiveTab] = useState('noEfectivo')   // 'noEfectivo' | 'efectivo'
   const [cargando,  setCargando]  = useState(false)
   const [error,     setError]     = useState('')
+  const [modo,      setModo]      = useState('periodo')   // 'periodo' | 'monto'
+  const [montoVisto, setMontoVisto] = useState(false)       // «Facturar por monto» se monta al abrirlo la 1.ª vez
   const reqRef = useRef(0)   // descarta respuestas de consultas anteriores (red móvil: llegan desordenadas)
 
   const { descargar, generando, aviso } = useEntregaPdf()
@@ -99,11 +103,21 @@ export default function Facturas() {
 
   const tabActiva = vista ? vista[activeTab] : []
 
+  const cambiarModo = useCallback((id) => {
+    setModo(id)
+    if (id === 'monto') setMontoVisto(true)
+  }, [])
+
   return (
     <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 min-w-0">
       <VolverAlPanel />
       <PageHeader title="Facturas" subtitle="Generar documento" />
 
+      <PestanasModo modo={modo} onCambiar={cambiarModo} />
+
+      {/* Ambos paneles quedan montados (con `hidden`) para no perder filtros ni ediciones sin exportar. */}
+      <div role="tabpanel" id={idPanel('periodo')} aria-labelledby={idPestana('periodo')} hidden={modo !== 'periodo'}
+        className="space-y-4 sm:space-y-6 min-w-0">
       {!online && (
         <div role="status" className="flex items-start gap-2 text-yellow-400 text-base sm:text-sm bg-yellow-500/10
                                        border border-yellow-500/20 rounded-xl px-4 py-2.5 font-body">
@@ -162,6 +176,13 @@ export default function Facturas() {
                 hayFiltros={hayFiltros} onLimpiarFiltros={limpiarFiltros} />
             </div>
           </Card>
+        </div>
+      )}
+      </div>
+
+      {montoVisto && (
+        <div role="tabpanel" id={idPanel('monto')} aria-labelledby={idPestana('monto')} hidden={modo !== 'monto'} className="min-w-0">
+          <FacturarPorMonto />
         </div>
       )}
     </div>

@@ -8,11 +8,14 @@
 import { ESTADO_LABEL, esLineaSimple, esSplit, estadoDe, fechaDe, fmt, fmtFecha } from './facturas'
 
 /** Nombre de archivo seguro: sin tildes, espacios ni caracteres de ruta. */
-export function nombreArchivo(titulo, desde, hasta) {
-  const base = String(titulo)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w.-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
-  return `${base}_${fmtFecha(desde)}_${fmtFecha(hasta)}.pdf`
+const sanear = (txt) => String(txt)
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^\w.-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
+
+/** `sufijo` (opcional) permite distinguir archivos del mismo título (p. ej. el cliente en «Facturar por monto»). */
+export function nombreArchivo(titulo, desde, hasta, sufijo = '') {
+  const extra = sanear(sufijo)
+  return `${sanear(titulo)}_${fmtFecha(desde)}_${fmtFecha(hasta)}${extra ? `_${extra}` : ''}.pdf`
 }
 
 
@@ -33,16 +36,17 @@ export function describirCobroSimple(c) {
  * @param {string} titulo
  * @param {string} desde YYYY-MM-DD
  * @param {string} hasta YYYY-MM-DD
+ * @param {{sufijo?: string}} [opciones]  `sufijo`: texto extra para el nombre del archivo.
  * @returns {Promise<{blob: Blob, nombre: string}>}
  */
-export async function construirPDF(grupos, titulo, desde, hasta) {
+export async function construirPDF(grupos, titulo, desde, hasta, opciones = {}) {
   const { default: jsPDF }     = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
 
   const doc  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   doc.setProperties({ title: titulo })
   /** Devuelve el archivo en memoria; la descarga la decide el llamador. */
-  const salida = () => ({ blob: doc.output('blob'), nombre: nombreArchivo(titulo, desde, hasta) })
+  const salida = () => ({ blob: doc.output('blob'), nombre: nombreArchivo(titulo, desde, hasta, opciones.sufijo) })
   const PW   = 210
   const ML   = 14
   const MR   = 14
@@ -142,7 +146,8 @@ export async function construirPDF(grupos, titulo, desde, hasta) {
       doc.setFont('helvetica', 'italic')
       doc.setTextColor(120, 120, 120)
       doc.text(
-        `Presupuesto #${pres.idPresupuesto} — ${fmtFecha(pres.fechaFacturacion)} — ${ESTADO_LABEL[estadoDe(pres)] ?? pres.metodoPago}`,
+        pres.etiqueta
+          ?? `Presupuesto #${pres.idPresupuesto} — ${fmtFecha(pres.fechaFacturacion)} — ${ESTADO_LABEL[estadoDe(pres)] ?? pres.metodoPago}`,
         ML + 4, y
       )
       y += 5

@@ -28,8 +28,9 @@ export function buscarProductosParaEncargo(catalogo, texto) {
  * @param {(producto: {idProducto:number,nombre:string,tieneMedidas:number})=>void} props.onElegir
  * @param {string} [props.error]
  * @param {boolean} [props.disabled]
+ * @param {string} [props.destino]  Sustantivo para el anuncio accesible («agregado al …»). Por defecto «encargo».
  */
-export default function SelectorProducto({ onElegir, error, disabled = false }) {
+export default function SelectorProducto({ onElegir, error, disabled = false, destino = 'encargo' }) {
   const uid = useId()
   const { estado, productos, reintentar, refrescarSiVencido } = useCatalogoProductos()
   const [texto, setTexto] = useState('')
@@ -42,11 +43,11 @@ export default function SelectorProducto({ onElegir, error, disabled = false }) 
 
   const elegir = useCallback((p) => {
     onElegir(p)
-    setAnuncio(`«${p.nombre}» agregado al encargo.`)
+    setAnuncio(`«${p.nombre}» agregado al ${destino}.`)
     setTexto('')
     setAbierto(false)
     inputRef.current?.focus() // listo para el siguiente
-  }, [onElegir])
+  }, [onElegir, destino])
 
   const { indiceActivo, onKeyDown } = useNavegacionLista({
     cantidad: items.length, abierto: abierto && items.length > 0,

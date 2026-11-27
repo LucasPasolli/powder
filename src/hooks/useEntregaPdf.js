@@ -10,7 +10,7 @@ import { construirPDF, descargarBlob } from '../lib/facturasPdf'
 const AVISO_MS = 8_000
 
 /**
- * @typedef {{grupos: import('../lib/facturas').GrupoCliente[], titulo: string, desde: string, hasta: string}} PayloadPdf
+ * @typedef {{grupos: import('../lib/facturas').GrupoCliente[], titulo: string, desde: string, hasta: string, sufijo?: string}} PayloadPdf
  * @typedef {{tipo: 'ok'|'error', texto: string}} Aviso
  */
 
@@ -19,9 +19,10 @@ export function useEntregaPdf() {
 
   const accion = useCallback(async (/** @type {PayloadPdf} */ p) => {
     setAviso(null)
-    const { blob, nombre } = await construirPDF(p.grupos, p.titulo, p.desde, p.hasta)
+    const { blob, nombre } = await construirPDF(p.grupos, p.titulo, p.desde, p.hasta, { sufijo: p.sufijo })
     descargarBlob(blob, nombre)
     setAviso({ tipo: 'ok', texto: 'PDF generado. Buscalo en tus descargas.' })
+    return true   // `descargar` resuelve true sólo si el PDF se generó (undefined si falló)
   }, [])
 
   const { run, pending } = useAsyncAction(accion, {
